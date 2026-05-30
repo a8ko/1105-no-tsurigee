@@ -1,0 +1,652 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>釣りゲーム実装仕様書</title>
+<style>
+  :root {
+    --bg: #0f1419;
+    --panel: #1a2129;
+    --panel-2: #222c38;
+    --text: #e6edf3;
+    --muted: #9fb0c0;
+    --accent: #4fb3ff;
+    --accent-2: #36d399;
+    --border: #2c3947;
+    --code-bg: #11161c;
+    --easy: #36d399;
+    --normal: #4fb3ff;
+    --hard: #f5a623;
+    --legend: #ff6b8a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic", "Segoe UI", Roboto, sans-serif;
+    line-height: 1.8;
+    font-size: 16px;
+  }
+  .layout { display: flex; max-width: 1200px; margin: 0 auto; }
+
+  /* Sidebar nav */
+  nav {
+    position: sticky;
+    top: 0;
+    align-self: flex-start;
+    width: 240px;
+    height: 100vh;
+    overflow-y: auto;
+    padding: 28px 16px;
+    border-right: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  nav h2 {
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+    margin: 0 0 12px 8px;
+  }
+  nav a {
+    display: block;
+    color: var(--muted);
+    text-decoration: none;
+    padding: 6px 10px;
+    border-radius: 6px;
+    font-size: 14px;
+    transition: all 0.15s;
+  }
+  nav a:hover { background: var(--panel-2); color: var(--text); }
+
+  main { flex: 1; padding: 40px 48px; min-width: 0; }
+
+  header.hero {
+    background: linear-gradient(135deg, #1a2a3a, #16202b);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 36px 40px;
+    margin-bottom: 40px;
+  }
+  header.hero h1 { margin: 0 0 8px; font-size: 32px; }
+  header.hero p { margin: 0; color: var(--muted); }
+  .stack-tags { margin-top: 18px; display: flex; gap: 10px; flex-wrap: wrap; }
+  .stack-tags span {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    color: var(--accent);
+    padding: 4px 14px;
+    border-radius: 999px;
+    font-size: 13px;
+    font-weight: 600;
+  }
+
+  section {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 24px 28px;
+    margin-bottom: 24px;
+  }
+  section > h2 {
+    margin: 0 0 18px;
+    font-size: 22px;
+    padding-bottom: 12px;
+    border-bottom: 2px solid var(--accent);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  section h3 {
+    font-size: 17px;
+    color: var(--accent-2);
+    margin: 24px 0 10px;
+  }
+  .icon { font-size: 22px; }
+
+  ul { margin: 8px 0; padding-left: 22px; }
+  li { margin: 4px 0; }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 14px 0;
+    font-size: 15px;
+  }
+  th, td {
+    text-align: left;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+  }
+  th { background: var(--panel-2); color: var(--accent); }
+  tr:hover td { background: rgba(255,255,255,0.02); }
+
+  pre {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px 18px;
+    overflow-x: auto;
+    margin: 12px 0;
+  }
+  code {
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+    font-size: 14px;
+  }
+  pre code { color: #cdd9e5; }
+  p code, li code {
+    background: var(--code-bg);
+    padding: 2px 7px;
+    border-radius: 5px;
+    font-size: 13px;
+    color: var(--accent);
+  }
+
+  /* keyboard key */
+  kbd {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-bottom-width: 2px;
+    border-radius: 6px;
+    padding: 2px 8px;
+    font-family: monospace;
+    font-size: 13px;
+    color: var(--text);
+  }
+
+  /* flow steps */
+  .flow {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    margin: 14px 0;
+  }
+  .flow .step {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 16px;
+    font-size: 14px;
+  }
+  .flow .arrow {
+    text-align: center;
+    color: var(--accent);
+    font-size: 16px;
+    line-height: 1.4;
+  }
+  .flow.branch .step { border-color: var(--accent-2); }
+
+  /* difficulty cards */
+  .diff-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 14px;
+    margin: 14px 0;
+  }
+  .diff-card {
+    border-radius: 10px;
+    padding: 16px;
+    border: 1px solid var(--border);
+    background: var(--panel-2);
+  }
+  .diff-card h4 {
+    margin: 0 0 12px;
+    font-size: 16px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .diff-card .badge {
+    font-size: 11px;
+    padding: 2px 10px;
+    border-radius: 999px;
+    color: #0f1419;
+    font-weight: 700;
+  }
+  .diff-card.easy { border-color: var(--easy); }
+  .diff-card.easy .badge { background: var(--easy); }
+  .diff-card.normal { border-color: var(--normal); }
+  .diff-card.normal .badge { background: var(--normal); }
+  .diff-card.hard { border-color: var(--hard); }
+  .diff-card.hard .badge { background: var(--hard); }
+  .diff-card.legend { border-color: var(--legend); }
+  .diff-card.legend .badge { background: var(--legend); }
+  .diff-card dl { margin: 0; font-size: 14px; }
+  .diff-card dl div { display: flex; justify-content: space-between; padding: 3px 0; }
+  .diff-card dt { color: var(--muted); }
+  .diff-card dd { margin: 0; font-weight: 600; }
+
+  /* result badges */
+  .judge { display: flex; gap: 12px; flex-wrap: wrap; margin: 12px 0; }
+  .judge div {
+    flex: 1;
+    min-width: 140px;
+    border-radius: 10px;
+    padding: 14px;
+    border: 1px solid var(--border);
+    background: var(--panel-2);
+  }
+  .judge .perfect { border-left: 4px solid var(--accent-2); }
+  .judge .good { border-left: 4px solid var(--hard); }
+  .judge .miss { border-left: 4px solid var(--legend); }
+  .judge strong { display: block; margin-bottom: 4px; }
+
+  .note {
+    background: rgba(79,179,255,0.08);
+    border-left: 3px solid var(--accent);
+    padding: 12px 16px;
+    border-radius: 6px;
+    margin: 12px 0;
+    color: var(--muted);
+    font-size: 14px;
+  }
+  .key-hint {
+    display: inline-block;
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 4px 12px;
+    margin: 6px 0;
+    font-size: 13px;
+    color: var(--accent-2);
+  }
+
+  footer { text-align: center; color: var(--muted); font-size: 13px; padding: 30px 0; }
+
+  @media (max-width: 800px) {
+    nav { display: none; }
+    main { padding: 24px 18px; }
+  }
+</style>
+</head>
+<body>
+<div class="layout">
+  <nav>
+    <h2>目次</h2>
+    <a href="#overview">概要</a>
+    <a href="#screen">画面仕様</a>
+    <a href="#controls">操作</a>
+    <a href="#title">タイトル画面</a>
+    <a href="#map">マップ</a>
+    <a href="#encyclopedia">図鑑</a>
+    <a href="#data">収集物データ</a>
+    <a href="#difficulty">難易度</a>
+    <a href="#fishing">釣りモード</a>
+    <a href="#hooking">フッキング</a>
+    <a href="#hit">ヒットフェーズ</a>
+    <a href="#meter">メーターゲーム</a>
+    <a href="#judge">判定</a>
+    <a href="#result">釣果画面</a>
+    <a href="#save">セーブ</a>
+    <a href="#scenes">シーン構成</a>
+    <a href="#placeholder">プレースホルダー</a>
+    <a href="#policy">実装方針</a>
+  </nav>
+
+  <main>
+    <header class="hero">
+      <h1>🎣 釣りゲーム実装仕様書</h1>
+      <p>Webブラウザで動作する、RPGツクール風 見下ろし視点の釣りゲーム</p>
+      <div class="stack-tags">
+        <span>TypeScript</span>
+        <span>Phaser 3</span>
+        <span>LocalStorage</span>
+        <span>データ駆動設計</span>
+      </div>
+    </header>
+
+    <section id="overview">
+      <h2><span class="icon">📋</span>概要</h2>
+      <p>Webブラウザで動作する釣りゲームを実装する。ゲームはRPGツクール風の見下ろし視点で進行する。</p>
+      <h3>初期実装範囲</h3>
+      <ul>
+        <li>タイトル画面</li>
+        <li>部屋マップ</li>
+        <li>ベランダマップ</li>
+        <li>釣りシステム</li>
+        <li>図鑑システム</li>
+        <li>LocalStorageによるセーブ</li>
+      </ul>
+      <div class="note">将来的な拡張（マップ追加、ショップ、アイテム、餌など）を考慮し、データ駆動型の設計を行うこと。</div>
+    </section>
+
+    <section id="screen">
+      <h2><span class="icon">🖥️</span>画面仕様</h2>
+      <h3>内部解像度</h3>
+      <p><code>320 × 180</code> ／ ブラウザ上では整数倍拡大表示を行う。</p>
+      <h3>カメラ</h3>
+      <ul>
+        <li>固定カメラ</li>
+        <li>スクロールなし</li>
+      </ul>
+    </section>
+
+    <section id="controls">
+      <h2><span class="icon">🎮</span>操作</h2>
+      <table>
+        <tr><th>操作</th><th>キー</th></tr>
+        <tr><td>移動</td><td><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> または 矢印キー</td></tr>
+        <tr><td>決定</td><td><kbd>Space</kbd></td></tr>
+        <tr><td>戻る / キャンセル</td><td><kbd>Q</kbd></td></tr>
+        <tr><td>図鑑を開く</td><td><kbd>E</kbd></td></tr>
+      </table>
+      <div class="note">マウス操作は実装しない。UI入力はキーボードのみ。</div>
+    </section>
+
+    <section id="title">
+      <h2><span class="icon">🏠</span>タイトル画面</h2>
+      <h3>メニュー</h3>
+      <ul>
+        <li>はじめる</li>
+        <li>続きから</li>
+        <li>データ削除</li>
+      </ul>
+      <h3>操作</h3>
+      <ul>
+        <li>上下移動</li>
+        <li><kbd>Space</kbd> で決定</li>
+      </ul>
+      <div class="note">データ削除時は確認ダイアログを表示する。</div>
+    </section>
+
+    <section id="map">
+      <h2><span class="icon">🗺️</span>マップ</h2>
+
+      <h3>部屋</h3>
+      <p>ゲーム開始地点。プレイヤーは部屋内を4方向移動できる。窓を調べると以下を表示する。</p>
+      <div class="flow branch">
+        <div class="step">💬「ベランダに出る？」 → はい / いいえ</div>
+      </div>
+      <p>「はい」を選択するとベランダへ移動する。</p>
+
+      <h3>ベランダ</h3>
+      <p>プレイヤーは4方向移動できる。窓を調べると以下を表示する。</p>
+      <div class="flow branch">
+        <div class="step">💬「部屋に戻る？」 → はい / いいえ</div>
+      </div>
+      <p>「はい」を選択すると部屋へ移動する。</p>
+
+      <h3>釣りスポット</h3>
+      <p>ベランダ内に配置する。調べると以下を表示する。</p>
+      <div class="flow branch">
+        <div class="step">💬「釣りを始めますか？」 → はい / いいえ</div>
+      </div>
+      <p>「はい」を選択すると釣りモードへ移行する。</p>
+    </section>
+
+    <section id="encyclopedia">
+      <h2><span class="icon">📖</span>図鑑</h2>
+      <h3>開き方</h3>
+      <p>マップ画面で <kbd>E</kbd> キー。画面上に <span class="key-hint">E: 図鑑</span> を表示する。</p>
+
+      <h3>一覧表示</h3>
+      <ul>
+        <li>グリッド形式で表示する</li>
+        <li>各セルには収集物を表示する</li>
+        <li>未発見の場合、名前は「???」</li>
+      </ul>
+
+      <h3>ソート</h3>
+      <p>以下の3種類を実装する。</p>
+      <ul>
+        <li>図鑑番号順</li>
+        <li>名前順</li>
+        <li>レア度順 — <strong>レア度降順</strong>、同レア度内は<strong>図鑑番号順</strong></li>
+      </ul>
+
+      <h3>操作</h3>
+      <ul>
+        <li><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> / 矢印キーで移動</li>
+        <li><kbd>Space</kbd> で選択</li>
+        <li><kbd>Q</kbd> で戻る</li>
+      </ul>
+
+      <h3>詳細画面</h3>
+      <table>
+        <tr><th>項目</th><th>発見済み</th><th>未発見</th></tr>
+        <tr><td>イラスト</td><td>表示</td><td>—</td></tr>
+        <tr><td>名前</td><td>名前</td><td>???</td></tr>
+        <tr><td>レア度</td><td>レア度</td><td>?</td></tr>
+        <tr><td>説明文</td><td>説明</td><td>まだ見つかっていない</td></tr>
+      </table>
+    </section>
+
+    <section id="data">
+      <h2><span class="icon">🐟</span>収集物データ</h2>
+      <p>魚以外のアイテムも釣れるため、「魚」ではなく<strong>収集物（Catchable）</strong>として扱う。</p>
+      <pre><code>interface Catchable {
+    id: string;
+    encyclopediaNumber: number;
+
+    name: string;
+    description: string;
+
+    rarity: number;
+
+    difficulty: Difficulty;
+
+    imageKey: string;
+}</code></pre>
+      <div class="note">すべてデータテーブル管理とし、収集物追加時にゲームロジックの変更が不要な設計とする。</div>
+    </section>
+
+    <section id="difficulty">
+      <h2><span class="icon">⚙️</span>難易度</h2>
+      <pre><code>enum Difficulty {
+    EASY,
+    NORMAL,
+    HARD,
+    LEGEND
+}</code></pre>
+      <div class="diff-grid">
+        <div class="diff-card easy">
+          <h4>EASY <span class="badge">EASY</span></h4>
+          <dl>
+            <div><dt>hookWindowMs</dt><dd>600</dd></div>
+            <div><dt>requiredSuccesses</dt><dd>1</dd></div>
+            <div><dt>allowGood</dt><dd>true</dd></div>
+          </dl>
+        </div>
+        <div class="diff-card normal">
+          <h4>NORMAL <span class="badge">NORMAL</span></h4>
+          <dl>
+            <div><dt>hookWindowMs</dt><dd>500</dd></div>
+            <div><dt>requiredSuccesses</dt><dd>2</dd></div>
+            <div><dt>allowGood</dt><dd>true</dd></div>
+          </dl>
+        </div>
+        <div class="diff-card hard">
+          <h4>HARD <span class="badge">HARD</span></h4>
+          <dl>
+            <div><dt>hookWindowMs</dt><dd>350</dd></div>
+            <div><dt>requiredSuccesses</dt><dd>4</dd></div>
+            <div><dt>allowGood</dt><dd>false</dd></div>
+          </dl>
+        </div>
+        <div class="diff-card legend">
+          <h4>LEGEND <span class="badge">LEGEND</span></h4>
+          <dl>
+            <div><dt>hookWindowMs</dt><dd>250</dd></div>
+            <div><dt>requiredSuccesses</dt><dd>8</dd></div>
+            <div><dt>allowGood</dt><dd>false</dd></div>
+          </dl>
+        </div>
+      </div>
+    </section>
+
+    <section id="fishing">
+      <h2><span class="icon">🎣</span>釣りモード</h2>
+      <h3>終了方法</h3>
+      <p>魚がヒットしていない待機状態のみ <kbd>Q</kbd> キーで終了可能。画面内に <span class="key-hint">Q: 釣りをやめる</span> を表示する。</p>
+
+      <h3>浮き監視フェーズ</h3>
+      <p>釣り開始後、浮きを監視する。魚が食いつく前兆として浮きが「ピクン」と動く。</p>
+      <ul>
+        <li>ピクン回数：<strong>0〜3回</strong>（ランダム）</li>
+      </ul>
+      <div class="flow">
+        <div class="step">ピクン</div>
+        <div class="arrow">↓</div>
+        <div class="step">待機</div>
+        <div class="arrow">↓</div>
+        <div class="step">ピクン</div>
+        <div class="arrow">↓</div>
+        <div class="step">待機</div>
+        <div class="arrow">↓</div>
+        <div class="step">沈む</div>
+      </div>
+    </section>
+
+    <section id="hooking">
+      <h2><span class="icon">⚡</span>フッキング</h2>
+      <p>浮きが沈んだ瞬間に <kbd>Space</kbd> を押す。成功判定時間は難易度ごとの <code>hookWindowMs</code> を使用する。</p>
+      <div class="judge">
+        <div class="perfect"><strong>✅ 成功</strong>ヒットフェーズへ移行</div>
+        <div class="miss"><strong>❌ 失敗</strong>魚が逃げる → 待機状態へ戻る</div>
+      </div>
+    </section>
+
+    <section id="hit">
+      <h2><span class="icon">🐠</span>ヒットフェーズ</h2>
+      <p>魚とのやり取りを行う。</p>
+      <h3>基本操作</h3>
+      <ul>
+        <li><kbd>Space</kbd> 長押し</li>
+        <li>指定タイミングで <kbd>Space</kbd> を離す</li>
+      </ul>
+      <p>必要成功回数：<code>difficulty.requiredSuccesses</code></p>
+    </section>
+
+    <section id="meter">
+      <h2><span class="icon">📊</span>メーターゲーム</h2>
+      <div class="note">釣りシステムと<strong>完全分離</strong>すること。後から別方式へ差し替え可能な構造にする。</div>
+      <h3>インターフェース</h3>
+      <pre><code>export type MeterResult =
+    | "perfect"
+    | "good"
+    | "miss";
+
+export interface MeterGame {
+    start(): Promise&lt;MeterResult&gt;;
+}</code></pre>
+      <h3>初期実装</h3>
+      <p><kbd>Space</kbd> 長押しでゲージ増加。離したタイミングで <strong>Perfect / Good / Miss</strong> を判定して返す。</p>
+    </section>
+
+    <section id="judge">
+      <h2><span class="icon">⚖️</span>判定</h2>
+      <div class="judge">
+        <div class="perfect"><strong>Perfect</strong>常に成功</div>
+        <div class="good"><strong>Good</strong><code>allowGood</code> が true の場合のみ成功扱い</div>
+        <div class="miss"><strong>Miss</strong>即失敗 → 魚が逃げる</div>
+      </div>
+      <p>必要成功回数を満たすと<strong>釣り成功</strong>。</p>
+    </section>
+
+    <section id="result">
+      <h2><span class="icon">🎉</span>釣果画面</h2>
+
+      <h3>初取得</h3>
+      <div class="flow">
+        <div class="step">収集物獲得</div>
+        <div class="arrow">↓</div>
+        <div class="step">図鑑登録</div>
+        <div class="arrow">↓</div>
+        <div class="step">図鑑詳細画面表示</div>
+        <div class="arrow">↓</div>
+        <div class="step"><kbd>Space</kbd> で次へ</div>
+        <div class="arrow">↓</div>
+        <div class="step">釣りを続けますか？ → はい / いいえ</div>
+      </div>
+
+      <h3>既取得</h3>
+      <div class="flow">
+        <div class="step">収集物獲得</div>
+        <div class="arrow">↓</div>
+        <div class="step">釣りを続けますか？ → はい / いいえ</div>
+      </div>
+
+      <h3>失敗</h3>
+      <div class="flow">
+        <div class="step">逃げられてしまった…</div>
+        <div class="arrow">↓</div>
+        <div class="step"><kbd>Space</kbd></div>
+        <div class="arrow">↓</div>
+        <div class="step">釣りを続けますか？ → はい / いいえ</div>
+      </div>
+    </section>
+
+    <section id="save">
+      <h2><span class="icon">💾</span>セーブ</h2>
+      <p>LocalStorage使用。</p>
+      <h3>保存タイミング</h3>
+      <ul>
+        <li>収集物獲得時</li>
+        <li>図鑑更新時</li>
+        <li>釣り終了時</li>
+        <li>マップ移動時</li>
+      </ul>
+      <h3>セーブデータ</h3>
+      <pre><code>interface SaveData {
+    discoveredItems: string[];
+
+    currentMap: string;
+
+    playerX: number;
+    playerY: number;
+}</code></pre>
+    </section>
+
+    <section id="scenes">
+      <h2><span class="icon">🎬</span>シーン構成</h2>
+      <div class="flow">
+        <div class="step">TitleScene</div>
+        <div class="arrow">↓</div>
+        <div class="step">RoomScene</div>
+        <div class="arrow">↓</div>
+        <div class="step">BalconyScene</div>
+        <div class="arrow">↓</div>
+        <div class="step">FishingScene</div>
+        <div class="arrow">↓</div>
+        <div class="step">CatchResultScene</div>
+        <div class="arrow">↓</div>
+        <div class="step">FishingScene（続ける場合）</div>
+      </div>
+      <h3>図鑑</h3>
+      <pre><code>RoomScene    ┐
+             ├─ EncyclopediaScene
+BalconyScene ┘</code></pre>
+    </section>
+
+    <section id="placeholder">
+      <h2><span class="icon">🧱</span>プレースホルダー</h2>
+      <p>初期実装では仮素材を使用する。後から素材を差し替えられる構造にすること。</p>
+      <table>
+        <tr><th>対象</th><th>仮素材</th></tr>
+        <tr><td>主人公</td><td>単色矩形</td></tr>
+        <tr><td>浮き</td><td>単色スプライト</td></tr>
+        <tr><td>収集物</td><td>単色アイコン</td></tr>
+        <tr><td>UI</td><td>Phaser標準描画</td></tr>
+      </table>
+    </section>
+
+    <section id="policy">
+      <h2><span class="icon">📐</span>実装方針</h2>
+      <ul>
+        <li>TypeScriptのstrictモードを有効化</li>
+        <li>データ駆動設計</li>
+        <li>収集物追加時にコード変更不要</li>
+        <li>マップ追加を容易にする</li>
+        <li>メーターゲーム差し替え可能</li>
+        <li>UI入力はキーボードのみ</li>
+        <li>可能な限りSceneごとに責務分離を行う</li>
+      </ul>
+    </section>
+
+    <footer>釣りゲーム実装仕様書 — docs/SPEC.md より生成</footer>
+  </main>
+</div>
+</body>
+</html>
