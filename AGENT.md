@@ -4,8 +4,9 @@
 
 ## プロジェクト
 
-ベランダで釣りをする見下ろし視点のブラウザゲーム（**TypeScript + Phaser 3 + Vite**、内部解像度 320×180）。
-仕様は [`docs/SPEC.md`](docs/SPEC.md)、全体像は [`README.md`](README.md) を参照。
+ベランダで釣りをする見下ろし視点のブラウザゲーム（**TypeScript + Phaser 3 + Vite**）。
+現在は **1280×720 への作り直し中**で、いま動く新方向は歩行サンドボックス（`npm run dev` 後 `http://localhost:5173/sandbox.html`）。
+機能ドキュメントは [`docs/README.md`](docs/README.md)（機能一覧）と [`docs/TODO.md`](docs/TODO.md)（全体ロードマップ）、全体像は [`README.md`](README.md) を参照。
 
 ## このプロジェクトの担当者と進め方
 

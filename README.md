@@ -8,7 +8,11 @@ RPGツクール風の見下ろし視点で進行する、ブラウザ向けの�
 - 素材は初期実装ではプレースホルダー（コード生成の単色スプライト）。同じ `imageKey` で
   実素材をロードすれば差し替え可能です。
 
-詳細仕様は [`docs/SPEC.md`](docs/SPEC.md) を参照してください。
+機能ドキュメント（実装済み・検討中・TODO）は [`docs/README.md`](docs/README.md) を参照してください。
+
+> ⚠️ このREADMEは **旧 320×180 プロトタイプ** の説明です。現在は **1280×720 への作り直し**を進めており、
+> いま動く新方向は歩行サンドボックス（`npm run dev` 後 `http://localhost:5173/sandbox.html`）です。
+> 最新の機能一覧・全体像は [`docs/README.md`](docs/README.md) と [`docs/TODO.md`](docs/TODO.md) を参照。
 
 ## セットアップ
 
