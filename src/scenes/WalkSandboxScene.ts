@@ -1,16 +1,30 @@
 import Phaser from "phaser";
-import { SANDBOX, type CollisionRect } from "@/data/walkSandbox";
+import {
+  SANDBOX,
+  findMap,
+  type MapData,
+  type CollisionRect,
+  type EventMarker,
+  type EventTrigger,
+  type EventChoice,
+} from "@/data/walkSandbox";
 import type { Direction } from "@/types";
+import { preloadAssets, registerAnimations, makeWindow } from "@/systems/AssetLoader";
 
 /** テクスチャ／アニメのキー。 */
 const SHEET_KEY = "sandbox_character";
 const BG_KEY = "sandbox_background";
 const walkKey = (dir: Direction): string => `sandbox_walk_${dir}`;
 
-/** 編集した当たり判定をブラウザに自動保存するキー。 */
-const STORAGE_KEY = "tsurigee:sandbox:collision:v1";
-/** スタート位置をブラウザに自動保存するキー。 */
-const SPAWN_KEY = "tsurigee:sandbox:spawn:v1";
+// --- ブラウザ自動保存のキー。マップごとに分けて保存する（マップ id を末尾に付ける）。 ---
+const collisionKey = (mapId: string): string => `tsurigee:sandbox:collision:v2:${mapId}`;
+const spawnKey = (mapId: string): string => `tsurigee:sandbox:spawn:v2:${mapId}`;
+const eventKey = (mapId: string): string => `tsurigee:sandbox:events:v2:${mapId}`;
+
+// --- 旧バージョン（1マップ時代）の保存キー。初回だけ読み込んで引き継ぐ（データを消さないため）。 ---
+const OLD_COLLISION_KEY = "tsurigee:sandbox:collision:v1";
+const OLD_SPAWN_KEY = "tsurigee:sandbox:spawn:v1";
+const OLD_EVENT_KEY = "tsurigee:sandbox:events:v1";
 
 const DIRS: Direction[] = ["down", "left", "right", "up"];
 
@@ -24,8 +38,17 @@ const DIRS: Direction[] = ["down", "left", "right", "up"];
  * 既存の釣りゲーム（320×180）とは完全に独立しており、sandbox.html から起動する。
  */
 export class WalkSandboxScene extends Phaser.Scene {
+  /** いま表示しているマップ（背景・壁・スタート・イベントの入れ物）。 */
+  private currentMap!: MapData;
+
   private player!: Phaser.GameObjects.Sprite;
   private facing: Direction = "down";
+  /**
+   * キャラの「論理的な足元位置」。当たり判定・イベント判定・マス揃えはすべてここを基準にする
+   * （マスの中心に揃う）。キャラの絵は MZ 風に半マスぶん下げて描く（足がマスの底に立つ）。
+   * 表示位置との同期は syncSprite() が行う。
+   */
+  private pos = { x: 0, y: 0 };
   /** スタート位置（最初に立つ場所）。P キーで現在地に設定できる。 */
   private spawnPoint = { x: 0, y: 0 };
 
@@ -65,6 +88,35 @@ export class WalkSandboxScene extends Phaser.Scene {
   private moveOffset: { dx: number; dy: number } | null = null;
   private pointerNow: { x: number; y: number } = { x: 0, y: 0 };
 
+  // --- イベント配置エディタ用の状態（当たり判定エディタとは排他） ---
+  private eventMode = false;
+  private markers: EventMarker[] = [];
+  private markerGfx!: Phaser.GameObjects.Graphics;
+  /** マーカーの番号ラベル（描き直すたびに作り直す）。 */
+  private markerLabels: Phaser.GameObjects.Text[] = [];
+  private selectedMarkerIndex = -1;
+  /** 選択中マーカーを移動中のときのカーソルとの相対位置。 */
+  private markerMoveOffset: { dx: number; dy: number } | null = null;
+
+  // --- イベント発動（サンプル：踏む＝自動 / 調べる＝スペースキー） ---
+  /** 決定キー（調べる用 / メッセージを閉じる用）。 */
+  private spaceKey!: Phaser.Input.Keyboard.Key;
+  /** メッセージ表示中か（表示中は移動を止める）。 */
+  private messageOpen = false;
+  private messageBg?: Phaser.GameObjects.GameObject;
+  private messageText?: Phaser.GameObjects.Text;
+  /** いま踏んでいる地点（連続発動を防ぐ。離れたら -1 に戻す）。 */
+  private lastSteppedMarker = -1;
+
+  // --- 選択肢付きメッセージ（質問＋うん／いいや など） ---
+  private choiceOpen = false;
+  private choicePrompt = "";
+  private choiceList: EventChoice[] = [];
+  private choiceIndex = 0;
+  private choiceBg?: Phaser.GameObjects.GameObject;
+  private choicePromptText?: Phaser.GameObjects.Text;
+  private choiceItemTexts: Phaser.GameObjects.Text[] = [];
+
   private infoText!: Phaser.GameObjects.Text;
   private toastText!: Phaser.GameObjects.Text;
 
@@ -73,12 +125,17 @@ export class WalkSandboxScene extends Phaser.Scene {
   }
 
   preload(): void {
+    // 最初に開くマップを決める（以降の読み込みはこのマップを基準にする）。
+    this.currentMap = findMap(SANDBOX, SANDBOX.startMapId);
+
     const c = SANDBOX.character;
-    this.load.image(BG_KEY, SANDBOX.background.path);
+    this.load.image(BG_KEY, this.currentMap.background.path);
     this.load.spritesheet(SHEET_KEY, c.path, {
       frameWidth: c.frameWidth,
       frameHeight: c.frameHeight,
     });
+    // 登録済みの素材（メッセージ枠など）も読み込む。無ければ仮の見た目になる。
+    preloadAssets(this);
     // ファイルが無い場合は loaderror が飛ぶ。仮素材に切り替えるためフラグを立てる。
     this.load.on(Phaser.Loader.Events.FILE_LOAD_ERROR, (file: Phaser.Loader.File) => {
       if (file.key === BG_KEY) this.bgMissing = true;
@@ -102,6 +159,7 @@ export class WalkSandboxScene extends Phaser.Scene {
       .setDepth(0);
 
     this.createAnimations();
+    registerAnimations(this); // 登録済みの anime 素材があれば再生用に用意
     this.spawnPoint = this.loadSpawn();
     this.spawnPlayer();
     this.setupInput();
@@ -109,6 +167,13 @@ export class WalkSandboxScene extends Phaser.Scene {
     this.rects = this.loadRects();
     this.editorGfx = this.add.graphics().setDepth(50);
     this.redrawRects();
+
+    this.markers = this.loadMarkers();
+    this.markerGfx = this.add.graphics().setDepth(60);
+    this.drawMarkers();
+    this.messageOpen = false;
+    this.choiceOpen = false;
+    this.lastSteppedMarker = -1;
 
     this.createHud();
   }
@@ -139,35 +204,56 @@ export class WalkSandboxScene extends Phaser.Scene {
 
   private spawnPlayer(): void {
     const c = SANDBOX.character;
+    this.pos = { x: this.spawnPoint.x, y: this.spawnPoint.y };
     this.player = this.add
-      .sprite(this.spawnPoint.x, this.spawnPoint.y, SHEET_KEY, this.idleFrame("down"))
+      .sprite(this.pos.x, this.pos.y + this.footOffsetY(), SHEET_KEY, this.idleFrame("down"))
       // 原点を足元(下中央)にして、座標＝足の位置とする。
       .setOrigin(0.5, 1)
       .setScale(c.displayScale)
       .setDepth(20);
   }
 
+  /**
+   * キャラの絵を下げる量（半マス＝24px）。
+   * 論理足元(pos)はマスの中心のまま、見た目だけマスの底へ下げて RPGツクールMZ 風に立たせる。
+   */
+  private footOffsetY(): number {
+    return SANDBOX.character.stepTile / 2;
+  }
+
+  /** 論理足元位置(pos)に合わせてキャラの絵を配置する（MZ風に半マス下げる）。 */
+  private syncSprite(): void {
+    this.player.setPosition(this.pos.x, this.pos.y + this.footOffsetY());
+  }
+
   /** いま立っている場所をスタート位置にする（P キー）。 */
   private setStartHere(): void {
-    this.spawnPoint = { x: Math.round(this.player.x), y: Math.round(this.player.y) };
+    // スタート位置もマス目の中心にそろえる。
+    this.spawnPoint = {
+      x: this.snapToTileCenter(this.pos.x),
+      y: this.snapToTileCenter(this.pos.y),
+    };
     this.saveSpawn();
     this.redrawRects();
     this.showToast(`スタート位置を設定しました（x:${this.spawnPoint.x} y:${this.spawnPoint.y}）`);
   }
 
   private loadSpawn(): { x: number; y: number } {
+    let p = { x: this.currentMap.spawn.x, y: this.currentMap.spawn.y };
     try {
-      const raw = localStorage.getItem(SPAWN_KEY);
-      if (raw) return JSON.parse(raw) as { x: number; y: number };
+      // このマップ専用の保存 → 無ければ旧バージョンの保存 → それも無ければ設定ファイル。
+      const raw = localStorage.getItem(spawnKey(this.currentMap.id)) ?? localStorage.getItem(OLD_SPAWN_KEY);
+      if (raw) p = JSON.parse(raw) as { x: number; y: number };
     } catch {
       /* 壊れていたら無視 */
     }
-    return { x: SANDBOX.spawn.x, y: SANDBOX.spawn.y };
+    // スタート位置もマス目の中心にそろえる（壁・イベント・歩く位置を同じマス目に合わせる）。
+    return { x: this.snapToTileCenter(p.x), y: this.snapToTileCenter(p.y) };
   }
 
   private saveSpawn(): void {
     try {
-      localStorage.setItem(SPAWN_KEY, JSON.stringify(this.spawnPoint));
+      localStorage.setItem(spawnKey(this.currentMap.id), JSON.stringify(this.spawnPoint));
     } catch {
       /* 保存できなくても致命的ではない */
     }
@@ -183,18 +269,29 @@ export class WalkSandboxScene extends Phaser.Scene {
       right: [kb.addKey(K.D), kb.addKey(K.RIGHT)],
     };
 
-    // C: 編集モード切替 / E: 書き出し / X･Delete: 選択中を削除 / R: リセット
+    // C: 当たり判定エディタ切替 / V: イベント配置エディタ切替（両者は排他）。
+    // E･X･Delete はいま開いているエディタに応じて動作を切り替える。
     // Phaser が同じ keydown を二重発火することがあるので、once() ガードで1回だけ実行する。
     kb.on("keydown-C", () => this.runOnce("toggle", () => this.toggleEditing()));
-    kb.on("keydown-E", () => this.editing && this.runOnce("export", () => this.exportRects()));
-    kb.on("keydown-X", () => this.editing && this.runOnce("del", () => this.deleteSelected()));
-    kb.on("keydown-DELETE", () => this.editing && this.runOnce("del", () => this.deleteSelected()));
-    kb.on("keydown-BACKSPACE", () => this.editing && this.runOnce("del", () => this.deleteSelected()));
-    kb.on("keydown-R", () => this.editing && this.runOnce("reset", () => this.resetRects()));
+    kb.on("keydown-V", () => this.runOnce("toggleEvent", () => this.toggleEventMode()));
+    kb.on("keydown-T", () => this.eventMode && this.runOnce("trigger", () => this.cycleTrigger()));
+    kb.on("keydown-E", () => this.runOnce("export", () => this.onExportKey()));
+    kb.on("keydown-X", () => this.runOnce("del", () => this.onDeleteKey()));
+    kb.on("keydown-DELETE", () => this.runOnce("del", () => this.onDeleteKey()));
+    kb.on("keydown-BACKSPACE", () => this.runOnce("del", () => this.onDeleteKey()));
+    kb.on("keydown-R", () =>
+      this.runOnce("reset", () => {
+        if (this.editing) this.resetRects();
+        else if (this.eventMode) this.resetMarkers();
+      }),
+    );
     // P: いま立っている場所をスタート位置にする。
     kb.on("keydown-P", () => this.runOnce("spawn", () => this.setStartHere()));
     // H: 当たり判定の赤四角の表示／非表示を切り替える（本番の見た目を確認する）。
     kb.on("keydown-H", () => this.runOnce("show", () => this.toggleShowRects()));
+
+    // スペース：調べるイベントの発動／メッセージを閉じる。
+    this.spaceKey = kb.addKey(K.SPACE);
 
     this.input.on(Phaser.Input.Events.POINTER_DOWN, this.onPointerDown, this);
     this.input.on(Phaser.Input.Events.POINTER_MOVE, this.onPointerMove, this);
@@ -213,13 +310,44 @@ export class WalkSandboxScene extends Phaser.Scene {
     const realDelta = this.lastFrameMs ? now - this.lastFrameMs : 0;
     this.lastFrameMs = now;
 
-    if (this.editing) {
-      // 編集中は移動を止め、立ち止まり表示にする。
+    // 選択肢表示中は止める。上下で選び、スペースで決定。
+    if (this.choiceOpen) {
+      this.player.anims.stop();
+      this.player.setFrame(this.idleFrame(this.facing));
+      const n = this.choiceList.length;
+      if (n > 0) {
+        if (this.anyJustDown(this.keys.up)) {
+          this.choiceIndex = (this.choiceIndex - 1 + n) % n;
+          this.drawChoice();
+        }
+        if (this.anyJustDown(this.keys.down)) {
+          this.choiceIndex = (this.choiceIndex + 1) % n;
+          this.drawChoice();
+        }
+        if (Phaser.Input.Keyboard.JustDown(this.spaceKey)) this.confirmChoice();
+      }
+      return;
+    }
+
+    // メッセージ表示中は止める。スペースで閉じる。
+    if (this.messageOpen) {
+      this.player.anims.stop();
+      this.player.setFrame(this.idleFrame(this.facing));
+      if (Phaser.Input.Keyboard.JustDown(this.spaceKey)) this.closeMessage();
+      return;
+    }
+
+    if (this.editing || this.eventMode) {
+      // エディタ中は移動を止め、立ち止まり表示にする。
       this.player.anims.stop();
       this.player.setFrame(this.idleFrame(this.facing));
       return;
     }
     this.updateStepping(realDelta);
+
+    // 踏むイベント：地点に乗ったら自動発動。調べるイベント：スペースで発動。
+    this.checkStepEvents();
+    if (Phaser.Input.Keyboard.JustDown(this.spaceKey)) this.checkExamineEvents();
   }
 
   /**
@@ -258,14 +386,16 @@ export class WalkSandboxScene extends Phaser.Scene {
       if (this.stepElapsed < this.stepTotal) {
         // まだ1歩の途中：割合で位置を補間する（速さは一定）。
         const t = this.stepElapsed / this.stepTotal;
-        this.player.x = Phaser.Math.Linear(this.stepFrom.x, this.stepTo.x, t);
-        this.player.y = Phaser.Math.Linear(this.stepFrom.y, this.stepTo.y, t);
+        this.pos.x = Phaser.Math.Linear(this.stepFrom.x, this.stepTo.x, t);
+        this.pos.y = Phaser.Math.Linear(this.stepFrom.y, this.stepTo.y, t);
+        this.syncSprite();
         this.player.anims.play(walkKey(this.facing), true);
         return;
       }
       // 1歩ぶん到着：きっちりマスに合わせ、使い切れずに余った時間を次の歩へ繰り越す。
-      this.player.x = this.stepTo.x;
-      this.player.y = this.stepTo.y;
+      this.pos.x = this.stepTo.x;
+      this.pos.y = this.stepTo.y;
+      this.syncSprite();
       remaining = this.stepElapsed - this.stepTotal;
       this.stepping = false;
     }
@@ -294,8 +424,8 @@ export class WalkSandboxScene extends Phaser.Scene {
     else this.facing = dy < 0 ? "up" : "down";
 
     const tile = SANDBOX.character.stepTile;
-    const tx = this.player.x + dx * tile;
-    const ty = this.player.y + dy * tile;
+    const tx = this.pos.x + dx * tile;
+    const ty = this.pos.y + dy * tile;
     if (this.collides(tx, ty)) {
       // 壁にぶつかる：進まず、その場で向きだけ変える。
       this.player.anims.stop();
@@ -303,7 +433,7 @@ export class WalkSandboxScene extends Phaser.Scene {
       return false;
     }
 
-    this.stepFrom = { x: this.player.x, y: this.player.y };
+    this.stepFrom = { x: this.pos.x, y: this.pos.y };
     this.stepTo = { x: tx, y: ty };
     this.stepElapsed = 0;
     this.stepTotal = SANDBOX.character.stepMs;
@@ -314,9 +444,12 @@ export class WalkSandboxScene extends Phaser.Scene {
 
   /** 足元の当たり判定の四角（中央下＝(cx,cy)）。 */
   private playerBox(cx: number, cy: number): Phaser.Geom.Rectangle {
-    const w = SANDBOX.character.hitboxWidth;
-    const h = SANDBOX.character.hitboxHeight;
-    return new Phaser.Geom.Rectangle(cx - w / 2, cy - h, w, h);
+    // ツクールMZと同じ「足元の1マス」単位の判定。中心(cx,cy)を覆う 1マス四方。
+    // 隣のマスと辺が接しても通り抜けられるよう、ほんの少し内側に縮める。
+    const t = SANDBOX.character.stepTile;
+    const inset = 2;
+    const s = t - inset * 2;
+    return new Phaser.Geom.Rectangle(cx - s / 2, cy - s / 2, s, s);
   }
 
   private collides(cx: number, cy: number): boolean {
@@ -338,12 +471,17 @@ export class WalkSandboxScene extends Phaser.Scene {
 
   private toggleEditing(): void {
     this.editing = !this.editing;
+    // 当たり判定エディタとイベント配置エディタは同時に使わない。
+    if (this.editing && this.eventMode) {
+      this.eventMode = false;
+      this.drawMarkers();
+    }
     this.selectedIndex = -1;
     this.dragStart = null;
     this.moveOffset = null;
     this.redrawRects();
     this.updateInfoText();
-    this.showToast(this.editing ? "編集モード ON" : "編集モード OFF（移動できます）");
+    this.showToast(this.editing ? "当たり判定エディタ ON" : "当たり判定エディタ OFF（移動できます）");
   }
 
   /** 当たり判定の赤四角の表示／非表示を切り替える（本番の見た目チェック用）。 */
@@ -357,6 +495,10 @@ export class WalkSandboxScene extends Phaser.Scene {
   }
 
   private onPointerDown(pointer: Phaser.Input.Pointer): void {
+    if (this.eventMode) {
+      this.onMarkerPointerDown(pointer.worldX, pointer.worldY);
+      return;
+    }
     if (!this.editing) return;
     const x = pointer.worldX;
     const y = pointer.worldY;
@@ -377,30 +519,43 @@ export class WalkSandboxScene extends Phaser.Scene {
   }
 
   private onPointerMove(pointer: Phaser.Input.Pointer): void {
+    if (this.eventMode) {
+      if (this.markerMoveOffset && this.selectedMarkerIndex >= 0) {
+        // ドラッグ中も、カーソルがあるマスの中心に揃えて動かす（マス単位で配置）。
+        const m = this.markers[this.selectedMarkerIndex];
+        m.x = this.snapToTileCenter(pointer.worldX);
+        m.y = this.snapToTileCenter(pointer.worldY);
+        this.drawMarkers();
+      }
+      return;
+    }
     if (!this.editing) return;
     this.pointerNow = { x: pointer.worldX, y: pointer.worldY };
     if (this.moveOffset && this.selectedIndex >= 0) {
+      // 移動もマス単位：左上をマスの境目に揃える。
       const r = this.rects[this.selectedIndex];
-      r.x = Math.round(this.pointerNow.x - this.moveOffset.dx);
-      r.y = Math.round(this.pointerNow.y - this.moveOffset.dy);
+      r.x = this.tileEdge(this.pointerNow.x - this.moveOffset.dx, "round");
+      r.y = this.tileEdge(this.pointerNow.y - this.moveOffset.dy, "round");
     }
     if (this.dragStart || this.moveOffset) this.redrawRects();
   }
 
   private onPointerUp(): void {
+    if (this.eventMode) {
+      if (this.markerMoveOffset) {
+        this.markerMoveOffset = null;
+        this.saveMarkers();
+        this.drawMarkers();
+        this.updateInfoText();
+      }
+      return;
+    }
     if (!this.editing) return;
     if (this.dragStart) {
-      const a = this.dragStart;
-      const b = this.pointerNow;
-      const x = Math.round(Math.min(a.x, b.x));
-      const y = Math.round(Math.min(a.y, b.y));
-      const width = Math.round(Math.abs(b.x - a.x));
-      const height = Math.round(Math.abs(b.y - a.y));
-      // 小さすぎるドラッグ（誤クリック）は無視。
-      if (width >= 8 && height >= 8) {
-        this.rects.push({ x, y, width, height });
-        this.selectedIndex = this.rects.length - 1;
-      }
+      // ドラッグ範囲をマス目にそろえた四角にする（クリックだけなら1マス）。
+      const rect = this.tileRect(this.dragStart.x, this.dragStart.y, this.pointerNow.x, this.pointerNow.y);
+      this.rects.push(rect);
+      this.selectedIndex = this.rects.length - 1;
     }
     this.dragStart = null;
     this.moveOffset = null;
@@ -430,7 +585,7 @@ export class WalkSandboxScene extends Phaser.Scene {
 
   private resetRects(): void {
     if (!this.editing) return;
-    this.rects = SANDBOX.collisionRects.map((r) => ({ ...r }));
+    this.rects = this.currentMap.collisionRects.map((r) => ({ ...r }));
     this.selectedIndex = -1;
     this.saveRects();
     this.redrawRects();
@@ -462,6 +617,16 @@ export class WalkSandboxScene extends Phaser.Scene {
     const g = this.editorGfx;
     g.clear();
 
+    // 編集中はマス目（グリッド）を薄く描く（画面の端から48ドット刻み）。
+    if (this.editing) {
+      const t = SANDBOX.character.stepTile;
+      const w = SANDBOX.viewWidth;
+      const h = SANDBOX.viewHeight;
+      g.lineStyle(1, 0xffffff, 0.18);
+      for (let x = 0; x <= w; x += t) g.lineBetween(x, 0, x, h);
+      for (let y = 0; y <= h; y += t) g.lineBetween(0, y, w, y);
+    }
+
     // 編集中は必ず表示（描けないと困る）。それ以外は H キーの設定に従う。
     // 非表示のときは何も描かないので、本番と同じ見た目になる（当たり判定の効きは残る）。
     if (this.editing || this.showRects) {
@@ -474,16 +639,13 @@ export class WalkSandboxScene extends Phaser.Scene {
       });
     }
 
-    // 新規ドラッグ中のプレビュー。
+    // 新規ドラッグ中のプレビュー（マス目にそろえた形で見せる）。
     if (this.editing && this.dragStart) {
-      const a = this.dragStart;
-      const b = this.pointerNow;
+      const r = this.tileRect(this.dragStart.x, this.dragStart.y, this.pointerNow.x, this.pointerNow.y);
       g.lineStyle(2, 0x40c040, 1);
       g.fillStyle(0x40c040, 0.2);
-      const x = Math.min(a.x, b.x);
-      const y = Math.min(a.y, b.y);
-      g.fillRect(x, y, Math.abs(b.x - a.x), Math.abs(b.y - a.y));
-      g.strokeRect(x, y, Math.abs(b.x - a.x), Math.abs(b.y - a.y));
+      g.fillRect(r.x, r.y, r.width, r.height);
+      g.strokeRect(r.x, r.y, r.width, r.height);
     }
 
     // 編集モード中はスタート位置（足元）に印を出す。
@@ -503,20 +665,415 @@ export class WalkSandboxScene extends Phaser.Scene {
 
   private loadRects(): CollisionRect[] {
     try {
-      const raw = localStorage.getItem(STORAGE_KEY);
+      // このマップ専用の保存 → 無ければ旧バージョンの保存 → それも無ければ設定ファイル。
+      const raw = localStorage.getItem(collisionKey(this.currentMap.id)) ?? localStorage.getItem(OLD_COLLISION_KEY);
       if (raw) return JSON.parse(raw) as CollisionRect[];
     } catch {
       /* 壊れていたら無視 */
     }
-    return SANDBOX.collisionRects.map((r) => ({ ...r }));
+    return this.currentMap.collisionRects.map((r) => ({ ...r }));
   }
 
   private saveRects(): void {
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(this.rects));
+      localStorage.setItem(collisionKey(this.currentMap.id), JSON.stringify(this.rects));
     } catch {
       /* 保存できなくても致命的ではない */
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  //  イベント配置エディタ（点でクリックして地点を置く）
+  // ---------------------------------------------------------------------------
+
+  /** E キー：いま開いているエディタに応じて書き出す。 */
+  private onExportKey(): void {
+    if (this.editing) this.exportRects();
+    else if (this.eventMode) this.exportMarkers();
+  }
+
+  /** X / Delete キー：いま開いているエディタに応じて選択中を削除する。 */
+  private onDeleteKey(): void {
+    if (this.editing) this.deleteSelected();
+    else if (this.eventMode) this.deleteSelectedMarker();
+  }
+
+  private toggleEventMode(): void {
+    this.eventMode = !this.eventMode;
+    // 当たり判定エディタとイベント配置エディタは同時に使わない。
+    if (this.eventMode && this.editing) {
+      this.editing = false;
+      this.redrawRects();
+    }
+    this.selectedMarkerIndex = -1;
+    this.markerMoveOffset = null;
+    this.drawMarkers();
+    this.updateInfoText();
+    this.showToast(
+      this.eventMode ? "イベント配置モード ON" : "イベント配置モード OFF（移動できます）",
+    );
+  }
+
+  /** 地点の上なら選択して移動、何も無ければその場所に新しい地点を置く。 */
+  private onMarkerPointerDown(x: number, y: number): void {
+    const hit = this.findMarkerAt(x, y);
+    if (hit >= 0) {
+      this.selectedMarkerIndex = hit;
+      const m = this.markers[hit];
+      this.markerMoveOffset = { dx: x - m.x, dy: y - m.y };
+    } else {
+      // 新規地点。クリックしたマスの中心に揃えて置く。きっかけの初期値は「調べる」。
+      const sx = this.snapToTileCenter(x);
+      const sy = this.snapToTileCenter(y);
+      this.markers.push({ x: sx, y: sy, trigger: "examine" });
+      this.selectedMarkerIndex = this.markers.length - 1;
+      this.markerMoveOffset = { dx: 0, dy: 0 };
+      this.saveMarkers();
+    }
+    this.drawMarkers();
+    this.updateInfoText();
+  }
+
+  /** 指定座標の近く（半径16px）にある地点のインデックス（上にあるものを優先）。 */
+  private findMarkerAt(x: number, y: number): number {
+    for (let i = this.markers.length - 1; i >= 0; i--) {
+      const m = this.markers[i];
+      if (Phaser.Math.Distance.Between(x, y, m.x, m.y) <= 16) return i;
+    }
+    return -1;
+  }
+
+  /**
+   * 値をマス目の中心（24, 72, 120, …）に揃える。
+   * 画面(0,0)を基準にした「絶対マス目」なので、壁・イベント・歩く位置が全部そろう。
+   */
+  private snapToTileCenter(value: number): number {
+    const t = SANDBOX.character.stepTile;
+    const half = t / 2;
+    return Math.round((value - half) / t) * t + half;
+  }
+
+  /**
+   * 値を「マスの境目（0, 48, 96, …）」に揃える。floor=切り下げ / ceil=切り上げ / round=最寄り。
+   * 当たり判定の四角の端をマス目にそろえるのに使う。
+   */
+  private tileEdge(value: number, mode: "floor" | "ceil" | "round"): number {
+    const t = SANDBOX.character.stepTile;
+    const k = value / t;
+    const n = mode === "floor" ? Math.floor(k) : mode === "ceil" ? Math.ceil(k) : Math.round(k);
+    return n * t;
+  }
+
+  /** ドラッグした2点を囲む「マス目にそろった四角」を作る（最低1マス）。 */
+  private tileRect(ax: number, ay: number, bx: number, by: number): CollisionRect {
+    const t = SANDBOX.character.stepTile;
+    const x = this.tileEdge(Math.min(ax, bx), "floor");
+    let right = this.tileEdge(Math.max(ax, bx), "ceil");
+    if (right - x < t) right = x + t;
+    const y = this.tileEdge(Math.min(ay, by), "floor");
+    let bottom = this.tileEdge(Math.max(ay, by), "ceil");
+    if (bottom - y < t) bottom = y + t;
+    return { x, y, width: right - x, height: bottom - y };
+  }
+
+  /** 選択中の地点のきっかけを 調べる⇄踏む で切り替える（T キー）。 */
+  private cycleTrigger(): void {
+    if (this.selectedMarkerIndex < 0) {
+      this.showToast("先に地点をクリックして選んでください");
+      return;
+    }
+    const m = this.markers[this.selectedMarkerIndex];
+    m.trigger = m.trigger === "examine" ? "step" : "examine";
+    this.saveMarkers();
+    this.drawMarkers();
+    this.updateInfoText();
+    this.showToast(`${this.selectedMarkerIndex + 1}番のきっかけ: ${this.triggerLabel(m.trigger)}`);
+  }
+
+  private triggerLabel(t: EventTrigger): string {
+    return t === "examine" ? "調べる" : "踏む";
+  }
+
+  /** 番号を丸数字に（①〜⑳、それ以上は (21) のように）。 */
+  private circledNumber(n: number): string {
+    const circled = "①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳";
+    return n >= 1 && n <= circled.length ? circled[n - 1] : `(${n})`;
+  }
+
+  private deleteSelectedMarker(): void {
+    if (this.selectedMarkerIndex < 0) return;
+    this.markers.splice(this.selectedMarkerIndex, 1);
+    this.selectedMarkerIndex = -1;
+    this.markerMoveOffset = null;
+    this.saveMarkers();
+    this.drawMarkers();
+    this.updateInfoText();
+    this.showToast("地点を削除しました");
+  }
+
+  private exportMarkers(): void {
+    if (this.markers.length === 0) {
+      this.showToast("まだ地点がありません");
+      return;
+    }
+    const lines = this.markers.map(
+      (m, i) =>
+        `    { x: ${m.x}, y: ${m.y}, trigger: "${m.trigger}" }, // ${this.circledNumber(i + 1)} ${this.triggerLabel(m.trigger)}`,
+    );
+    const snippet = `  eventMarkers: [\n${lines.join("\n")}\n  ],`;
+    // eslint-disable-next-line no-console
+    console.log(
+      "[サンドボックス] イベント地点。walkSandbox.ts の eventMarkers に貼り付け、各番号の内容を私に伝えてください:\n" +
+        snippet,
+    );
+    const clip = navigator.clipboard;
+    if (clip && typeof clip.writeText === "function") {
+      void clip.writeText(snippet).then(
+        () => this.showToast("コピーしました（コンソールにも出力）"),
+        () => this.showToast("コンソールに出力しました"),
+      );
+    } else {
+      this.showToast("コンソールに出力しました");
+    }
+  }
+
+  private drawMarkers(): void {
+    const g = this.markerGfx;
+    g.clear();
+    // 番号ラベルは作り直す。
+    this.markerLabels.forEach((t) => t.destroy());
+    this.markerLabels = [];
+
+    // イベント配置モード中だけ表示する（本番の見た目には出さない）。
+    if (!this.eventMode) return;
+
+    const t = SANDBOX.character.stepTile;
+    const w = SANDBOX.viewWidth;
+    const h = SANDBOX.viewHeight;
+
+    // --- マス目（グリッド）を薄く描く（画面の端から48ドット刻み）。 ---
+    const half = t / 2;
+    g.lineStyle(1, 0xffffff, 0.18);
+    for (let x = 0; x <= w; x += t) g.lineBetween(x, 0, x, h);
+    for (let y = 0; y <= h; y += t) g.lineBetween(0, y, w, y);
+
+    // --- 各イベントを「マス（48×48）」として描く。番号は中央。 ---
+    this.markers.forEach((m, i) => {
+      const selected = i === this.selectedMarkerIndex;
+      // 調べる=黄 / 踏む=水色。
+      const color = m.trigger === "examine" ? 0xffd24a : 0x40c0ff;
+      g.fillStyle(color, 0.35);
+      g.fillRect(m.x - half, m.y - half, t, t);
+      g.lineStyle(selected ? 4 : 2, selected ? 0xffffff : 0x000000, 0.9);
+      g.strokeRect(m.x - half, m.y - half, t, t);
+
+      const label = this.add
+        .text(m.x, m.y, String(i + 1), {
+          fontFamily: '"Hiragino Maru Gothic ProN", sans-serif',
+          fontSize: "20px",
+          color: "#1a1a1a",
+          fontStyle: "bold",
+        })
+        .setOrigin(0.5)
+        .setDepth(61);
+      this.markerLabels.push(label);
+    });
+  }
+
+  private loadMarkers(): EventMarker[] {
+    try {
+      // このマップ専用の保存 → 無ければ旧バージョンの保存 → それも無ければ設定ファイル。
+      const raw = localStorage.getItem(eventKey(this.currentMap.id)) ?? localStorage.getItem(OLD_EVENT_KEY);
+      if (raw) return JSON.parse(raw) as EventMarker[];
+    } catch {
+      /* 壊れていたら無視 */
+    }
+    return this.cloneConfigMarkers();
+  }
+
+  /** 設定ファイルの「このマップ」のイベント地点を丸ごと複製する（choices 配列まで深くコピー）。 */
+  private cloneConfigMarkers(): EventMarker[] {
+    return this.currentMap.eventMarkers.map((m) => JSON.parse(JSON.stringify(m)) as EventMarker);
+  }
+
+  /** 設定ファイルの内容に戻す（質問・選択肢などの本実装を反映するときに使う）。 */
+  private resetMarkers(): void {
+    this.markers = this.cloneConfigMarkers();
+    this.selectedMarkerIndex = -1;
+    this.markerMoveOffset = null;
+    this.saveMarkers();
+    this.drawMarkers();
+    this.updateInfoText();
+    this.showToast("設定ファイルの内容に戻しました");
+  }
+
+  private saveMarkers(): void {
+    try {
+      localStorage.setItem(eventKey(this.currentMap.id), JSON.stringify(this.markers));
+    } catch {
+      /* 保存できなくても致命的ではない */
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  //  イベント発動（サンプル：踏む＝自動 / 調べる＝スペースキー）
+  // ---------------------------------------------------------------------------
+
+  /** 足元が「踏む」地点に乗ったら発動。乗り続けている間は再発動しない。 */
+  private checkStepEvents(): void {
+    let on = -1;
+    this.markers.forEach((m, i) => {
+      if (m.trigger !== "step") return;
+      if (Phaser.Math.Distance.Between(this.pos.x, this.pos.y, m.x, m.y) <= 24) on = i;
+    });
+    if (on >= 0 && on !== this.lastSteppedMarker) {
+      this.lastSteppedMarker = on;
+      this.fireEvent(on);
+    } else if (on < 0) {
+      // どの地点からも離れた：次に乗ったときまた発動できるようにする。
+      this.lastSteppedMarker = -1;
+    }
+  }
+
+  /** 正面（または足元の近く）の「調べる」地点を発動する。 */
+  private checkExamineEvents(): void {
+    const reach = SANDBOX.character.stepTile; // 正面1マスぶん
+    const fx =
+      this.pos.x + (this.facing === "left" ? -reach : this.facing === "right" ? reach : 0);
+    const fy =
+      this.pos.y + (this.facing === "up" ? -reach : this.facing === "down" ? reach : 0);
+    let best = -1;
+    let bestDist = Infinity;
+    this.markers.forEach((m, i) => {
+      if (m.trigger !== "examine") return;
+      // 正面の点か足元か、近い方で判定（多少アバウトでも拾えるように）。
+      const d = Math.min(
+        Phaser.Math.Distance.Between(fx, fy, m.x, m.y),
+        Phaser.Math.Distance.Between(this.pos.x, this.pos.y, m.x, m.y),
+      );
+      if (d <= 40 && d < bestDist) {
+        best = i;
+        bestDist = d;
+      }
+    });
+    if (best >= 0) this.fireEvent(best);
+  }
+
+  /** 地点の中身を表示する。choices があれば選択肢、message があればそれ、無ければ仮文。 */
+  private fireEvent(index: number): void {
+    const m = this.markers[index];
+    if (m.choices && m.choices.length > 0) {
+      this.openChoice(m);
+      return;
+    }
+    const num = this.circledNumber(index + 1);
+    const text =
+      m.message ??
+      `${num} のイベント（${this.triggerLabel(m.trigger)}）が発動しました。\n` +
+        "（ここに出す内容は、あなたが教えてくれた中身に差し替えます）";
+    this.openMessage(text);
+  }
+
+  private anyJustDown(keys: Phaser.Input.Keyboard.Key[]): boolean {
+    let hit = false;
+    // 全キーを評価して JustDown を消費する（途中で打ち切らない）。
+    for (const k of keys) if (Phaser.Input.Keyboard.JustDown(k)) hit = true;
+    return hit;
+  }
+
+  private openChoice(m: EventMarker): void {
+    this.choiceOpen = true;
+    this.choicePrompt = m.prompt ?? "";
+    this.choiceList = m.choices ?? [];
+    this.choiceIndex = 0;
+    this.player.anims.stop();
+    this.player.setFrame(this.idleFrame(this.facing));
+    this.drawChoice();
+    this.showToast("↑↓で選んで スペースで決定");
+  }
+
+  private drawChoice(): void {
+    this.choiceBg?.destroy();
+    this.choicePromptText?.destroy();
+    this.choiceItemTexts.forEach((t) => t.destroy());
+    this.choiceItemTexts = [];
+
+    const w = SANDBOX.viewWidth;
+    const h = SANDBOX.viewHeight;
+    const boxH = 200;
+    const top = h - boxH - 24;
+    this.choiceBg = makeWindow(this, w / 2, top + boxH / 2, w - 80, boxH)
+      .setScrollFactor(0)
+      .setDepth(200);
+    this.choicePromptText = this.add
+      .text(60, top + 22, this.choicePrompt, {
+        fontFamily: '"Hiragino Maru Gothic ProN", sans-serif',
+        fontSize: "26px",
+        color: "#ffffff",
+      })
+      .setScrollFactor(0)
+      .setDepth(201);
+    this.choiceList.forEach((c, i) => {
+      const selected = i === this.choiceIndex;
+      const t = this.add
+        .text(96, top + 78 + i * 40, `${selected ? "▶ " : "　"}${c.label}`, {
+          fontFamily: '"Hiragino Maru Gothic ProN", sans-serif',
+          fontSize: "24px",
+          color: selected ? "#ffd24a" : "#ffffff",
+        })
+        .setScrollFactor(0)
+        .setDepth(201);
+      this.choiceItemTexts.push(t);
+    });
+  }
+
+  private confirmChoice(): void {
+    const choice = this.choiceList[this.choiceIndex];
+    this.closeChoice();
+    if (choice?.reply) this.openMessage(choice.reply);
+  }
+
+  private closeChoice(): void {
+    this.choiceOpen = false;
+    this.choiceBg?.destroy();
+    this.choicePromptText?.destroy();
+    this.choiceItemTexts.forEach((t) => t.destroy());
+    this.choiceBg = undefined;
+    this.choicePromptText = undefined;
+    this.choiceItemTexts = [];
+  }
+
+  private openMessage(text: string): void {
+    this.messageOpen = true;
+    this.player.anims.stop();
+    this.player.setFrame(this.idleFrame(this.facing));
+
+    const w = SANDBOX.viewWidth;
+    const h = SANDBOX.viewHeight;
+    const boxH = 160;
+    const top = h - boxH - 24;
+    this.messageBg = makeWindow(this, w / 2, top + boxH / 2, w - 80, boxH)
+      .setScrollFactor(0)
+      .setDepth(200);
+    this.messageText = this.add
+      .text(60, top + 22, text, {
+        fontFamily: '"Hiragino Maru Gothic ProN", sans-serif',
+        fontSize: "24px",
+        color: "#ffffff",
+        wordWrap: { width: w - 140 },
+        lineSpacing: 6,
+      })
+      .setScrollFactor(0)
+      .setDepth(201);
+    this.showToast("スペースキーで閉じる");
+  }
+
+  private closeMessage(): void {
+    this.messageOpen = false;
+    this.messageBg?.destroy();
+    this.messageText?.destroy();
+    this.messageBg = undefined;
+    this.messageText = undefined;
   }
 
   // ---------------------------------------------------------------------------
@@ -551,14 +1108,29 @@ export class WalkSandboxScene extends Phaser.Scene {
   }
 
   private updateInfoText(): void {
-    // 本番表示中（非編集モードで当たり判定を隠している）は、説明文も隠して本番の見た目にする。
-    this.infoText.setVisible(this.editing || this.showRects);
+    // 本番表示中（どのエディタも開かず当たり判定を隠している）は、説明文も隠して本番の見た目にする。
+    this.infoText.setVisible(this.editing || this.eventMode || this.showRects);
 
-    if (this.editing) {
+    if (this.eventMode) {
+      const sel =
+        this.selectedMarkerIndex >= 0 ? `（選択中: ${this.selectedMarkerIndex + 1}番）` : "";
       this.infoText.setText(
         [
-          "【当たり判定エディタ】 四角の数: " + this.rects.length,
-          "ドラッグ: 新しい四角を描く  /  四角をドラッグ: 移動",
+          `【イベント配置モード】 地点の数: ${this.markers.length} ${sel}`,
+          "クリック: そのマスにイベントを置く（マス目に揃う・①②③…と番号）",
+          "地点をドラッグ: マス単位で動かす",
+          "T: 選んだ地点のきっかけを切替（調べる⇄踏む / 黄=調べる・水色=踏む）",
+          "X または Delete: 選択中の地点を削除",
+          "R: 設定ファイルの内容に戻す（私が入れた中身を反映）",
+          "E: 番号・座標・きっかけをコピー（私に渡す）",
+          "V: イベント配置モードを終了して歩く",
+        ].join("\n"),
+      );
+    } else if (this.editing) {
+      this.infoText.setText(
+        [
+          "【当たり判定エディタ】 壁の数: " + this.rects.length,
+          "ドラッグ: マス目で壁を描く（クリックで1マス）  /  壁をドラッグ: マス単位で移動",
           "X または Delete: 選択中を削除  /  R: 設定ファイルの内容に戻す",
           "E: 設定ファイルに貼れる形でコピー（スタート位置も含む）",
           "C: 編集モードを終了して歩く",
@@ -567,9 +1139,10 @@ export class WalkSandboxScene extends Phaser.Scene {
     } else {
       this.infoText.setText(
         [
-          "WASD / 矢印キー: 移動",
+          `マップ: ${this.currentMap.name}`,
+          "WASD / 矢印キー: 移動  /  スペース: 目の前を調べる",
           "P: いまいる場所をスタート位置にする",
-          "C: 当たり判定エディタを開く",
+          "C: 当たり判定エディタを開く  /  V: イベント配置エディタを開く",
           `H: 当たり判定の表示／非表示（いま: ${this.showRects ? "表示" : "非表示=本番"}）`,
         ].join("\n"),
       );

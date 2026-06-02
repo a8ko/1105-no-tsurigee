@@ -352,3 +352,63 @@ RPGツクール風の「1マスずつ進んで目標マスへ吸い付く」ス�
 ### 検証
 - `npm run typecheck`: パス
 - `node scripts/smoke-sandbox.mjs`: 7/7 PASS・console errors 0
+
+---
+
+## take13 — キャラの当たり判定をRPGツクールMZ仕様（足元1マス）に（2026-06-02）
+
+対象: 歩行サンドボックス（`src/scenes/WalkSandboxScene.ts` / `src/data/walkSandbox.ts`）。
+
+### フィードバック
+- 歩行グラフィックのキャラの当たり判定も、RPGツクールMZと同じ仕様（足元の1マス＝1タイル単位の通行判定）にしたい。
+- あわせて壁・イベント・歩行・スタート位置を、画面基準の48ドットのマス目にそろえる方針。
+
+### 変更内容（take12 → take13）
+
+| 項目 | 変更前 | 変更後 |
+| --- | --- | --- |
+| 当たり判定の形 | 足元に 70×36 の四角（中央下基準） | **足元の1マス 48×48**（マス中心基準・各辺2pxだけ内側） |
+| 判定サイズ指定 | `hitboxWidth: 70` / `hitboxHeight: 36` | **撤去**（1マス＝`stepTile` から算出） |
+| 判定の基準 | 自由なピクセル | 画面基準の48マス目に整列（隣マスと辺が接しても通行可） |
+| スタート位置 | 任意座標 | マス中心へ正規化（`snapToTileCenter`） |
+
+### 該当コード箇所
+- `src/scenes/WalkSandboxScene.ts`: `playerBox()` を「中心(cx,cy)を覆う 1マス四方（inset 2px）」に変更。
+- `src/data/walkSandbox.ts`: `CharacterConfig` と `SANDBOX.character` から `hitboxWidth` / `hitboxHeight` を削除。
+- 関連（同セッション）: マス目スナップ用ヘルパー `snapToTileCenter` / `tileEdge` / `tileRect` を追加し、壁・イベント・移動・スタート位置を画面基準48マス目に統一。
+
+### 検証
+- `npm run typecheck`: パス
+- `node scripts/smoke-sandbox.mjs`: 7/7 PASS・console errors 0
+- 計測: 1歩でΔx=48（マス整列）、開始位置 x=648（マス中心へ正規化）を確認
+
+---
+
+## take14 — キャラの立ち位置をMZ風に（足元をマスの底へ）（2026-06-02）
+
+対象: 歩行サンドボックス（`src/scenes/WalkSandboxScene.ts`）。
+
+### フィードバック
+- 「今いる地点をスタート位置にする」でキャラがマス目の半分くらいの位置から立っているように見えて気になる。
+- RPGツクールMZと同じく、キャラがマスの上にちょこんと立つ見た目にしたい。
+
+### 原因
+- take13 で当たり判定・スタート位置を「足元＝マスの中心」に揃えたため、キャラの足が
+  マスのど真ん中に来ていた（当たり判定自体は正しい）。MZは足元をマスの底に置くので半マスぶんずれて見えていた。
+
+### 変更内容（take13 → take14）
+
+| 項目 | 変更前 | 変更後 |
+| --- | --- | --- |
+| キャラ絵の立ち位置 | 足元＝マスの中心（座標そのまま描画） | **足元の絵だけ半マス（24px）下げ、マスの底に立たせる** |
+| 論理足元位置 | スプライト座標と一体（`player.x/y`） | **`pos`（論理位置）と表示を分離**。判定はすべて `pos` 基準 |
+| 当たり判定・イベント判定・マス揃え | マス中心基準 | **変更なし**（`pos` を基準に従来どおり） |
+
+### 該当コード箇所
+- `src/scenes/WalkSandboxScene.ts`:
+  - 論理足元 `pos` を導入。`footOffsetY()`（= `stepTile/2` = 24px）と `syncSprite()`（`pos.y + offset` に描画）を追加。
+  - `spawnPlayer` / `updateStepping` / `tryStartStep` / `setStartHere` / `checkStepEvents` / `checkExamineEvents` の座標参照を `player.x/y` → `pos.x/y` に統一。
+
+### 検証
+- `npm run typecheck`: パス
+- `node scripts/smoke-sandbox.mjs`: 7/7 PASS・console errors 0（本体 `smoke.mjs` も 15/15 PASS）

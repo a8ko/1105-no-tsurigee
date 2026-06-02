@@ -18,6 +18,11 @@ import type { Direction } from "@/types";
  *
  *  ■ 数値を変えたら
  *     ブラウザを更新（リロード）すると反映されます。
+ *
+ *  ■ マップについて（NEW）
+ *     このゲームは「マップ」という箱を複数持てます。1つのマップは
+ *     「背景・壁・スタート位置・イベント」をひとまとめにした箱です。
+ *     箱を増やすとマップが増えます（下の maps を参照）。
  * ===========================================================================
  */
 
@@ -29,6 +34,35 @@ export interface CollisionRect {
   height: number;
 }
 
+/** イベントのきっかけ（起動条件）。examine＝調べる(決定ボタン) / step＝踏む(乗ると自動)。 */
+export type EventTrigger = "examine" | "step";
+
+/** 選択肢の1つ（例:「うん。」）。 */
+export interface EventChoice {
+  /** 画面に出す選択肢の文（例:「うん。」「いいや。」）。 */
+  label: string;
+  /** 選んだあとに出すメッセージ（任意。未設定なら何も出さず閉じる）。 */
+  reply?: string;
+}
+
+/** マップ上に置く1つのイベント地点。番号①②③…は配列の並び順で決まる。 */
+export interface EventMarker {
+  /** 地点の中心位置（ピクセル）。 */
+  x: number;
+  y: number;
+  /** きっかけ。"examine"＝調べると発動 / "step"＝踏むと発動。 */
+  trigger: EventTrigger;
+  /**
+   * 発動時に表示するメッセージ（任意）。
+   * 未設定で choices も無ければ「①のイベント（調べる）が発動しました」という確認用の仮文を出す。
+   */
+  message?: string;
+  /** 選択肢を出すときの質問文（例:「つりする？」）。choices と一緒に使う。 */
+  prompt?: string;
+  /** 選択肢の一覧（設定すると prompt とセットで「質問＋選択肢」を出す）。 */
+  choices?: EventChoice[];
+}
+
 /** 1つの向きの設定：その向きに使う「行」と、歩行で再生する「列」の順番。 */
 export interface DirectionFrames {
   /** スプライトシートの何行目か（0始まり）。 */
@@ -37,32 +71,54 @@ export interface DirectionFrames {
   frames: number[];
 }
 
-export interface SandboxConfig {
-  viewWidth: number;
-  viewHeight: number;
-  character: {
-    path: string;
-    frameWidth: number;
-    frameHeight: number;
-    columns: number;
-    rows: number;
-    directions: Record<Direction, DirectionFrames>;
-    idleColumn: number;
-    fps: number;
-    displayScale: number;
-    stepTile: number;
-    stepMs: number;
-    hitboxWidth: number;
-    hitboxHeight: number;
-  };
-  background: {
-    path: string;
-  };
+/** 歩行キャラの設定（全マップ共通：同じキャラで歩く）。 */
+export interface CharacterConfig {
+  path: string;
+  frameWidth: number;
+  frameHeight: number;
+  columns: number;
+  rows: number;
+  directions: Record<Direction, DirectionFrames>;
+  idleColumn: number;
+  fps: number;
+  displayScale: number;
+  stepTile: number;
+  stepMs: number;
+}
+
+/**
+ * 1枚のマップ（背景・壁・スタート位置・イベントを1つにまとめた箱）。
+ * RPGツクールMZの「マップ」に相当します。
+ */
+export interface MapData {
+  /** マップを区別する名前（英数字。プログラムが使う。例: "veranda"）。 */
+  id: string;
+  /** 画面に出すマップ名（日本語OK。例:「ベランダ」）。 */
+  name: string;
+  /** 背景画像のパス（public フォルダ基準）。 */
+  background: { path: string };
+  /** 当たり判定（壁）の四角の一覧。 */
   collisionRects: CollisionRect[];
+  /** イベント地点の一覧（ゲーム内で V キーのエディタを開いて置く）。 */
+  eventMarkers: EventMarker[];
+  /** キャラの最初の立ち位置。 */
   spawn: { x: number; y: number };
 }
 
-export const SANDBOX: SandboxConfig = {
+/** プロジェクト全体（複数マップ＋全マップ共通の設定）。 */
+export interface ProjectData {
+  /** 画面サイズ（全マップ共通）。 */
+  viewWidth: number;
+  viewHeight: number;
+  /** 歩行キャラの設定（全マップ共通）。 */
+  character: CharacterConfig;
+  /** マップの一覧。ここに箱を増やすとマップが増える。 */
+  maps: MapData[];
+  /** 最初に開くマップの id。 */
+  startMapId: string;
+}
+
+export const SANDBOX: ProjectData = {
   /** 画面サイズ（前のゲームに合わせて 1280×720）。 */
   viewWidth: 1280,
   viewHeight: 720,
@@ -112,25 +168,51 @@ export const SANDBOX: SandboxConfig = {
     stepTile: 48,
     /** ★ 1歩にかける時間（ミリ秒）。小さいほどキビキビ速く歩く（大きいほどゆっくり）。 */
     stepMs: 320,
-
-    /** 足元の当たり判定の大きさ（キャラの足元に置く四角）。 */
-    hitboxWidth: 70,
-    hitboxHeight: 36,
   },
 
-  background: {
-    /** ★ 手描き背景画像のパス。置いた画像のファイル名に合わせて変えてください。 */
-    path: "background.png",
-  },
+  /** ★ 最初に開くマップの id（下の maps の中から選ぶ）。 */
+  startMapId: "veranda",
 
   /**
-   * ★ 当たり判定（壁）の四角の一覧。
-   *    ゲーム内で C キーを押すと編集モードになり、マウスで四角を描けます。
-   *    E キーで「ここに貼れる形」でコピーされるので、その内容をこの [] の中に貼ると保存されます。
-   *    （描いた内容はブラウザにも自動保存され、リロードしても消えません）
+   * ★ マップの一覧。
+   *    マップ＝「背景・壁・スタート位置・イベント」を1つにまとめた箱です。
+   *    箱（{ ... }）を増やすとマップが増えます。
+   *    （マップを選んで切り替える機能は、今後の段階で追加します）
+   *
+   *    各マップの中で:
+   *    ・collisionRects … ゲーム内で C キーの当たり判定エディタで作る
+   *    ・eventMarkers   … ゲーム内で V キーのイベント配置エディタで置く
+   *    描いた内容はブラウザにも自動保存され、リロードしても消えません。
    */
-  collisionRects: [],
-
-  /** キャラの最初の立ち位置（画面の中央あたり）。 */
-  spawn: { x: 640, y: 520 },
+  maps: [
+    {
+      id: "veranda",
+      name: "ベランダ",
+      background: {
+        /** ★ 手描き背景画像のパス。置いた画像のファイル名に合わせて変えてください。 */
+        path: "background.png",
+      },
+      collisionRects: [],
+      eventMarkers: [
+        {
+          // ① 釣りポイント（踏むと「つりする？」と聞かれる）
+          x: 563,
+          y: 599,
+          trigger: "step",
+          prompt: "つりする？",
+          choices: [
+            { label: "うん。", reply: "（ここに釣りが入ります）" },
+            { label: "いいや。" },
+          ],
+        },
+      ],
+      /** キャラの最初の立ち位置（画面の中央あたり）。 */
+      spawn: { x: 640, y: 520 },
+    },
+  ],
 };
+
+/** id からマップを探す。見つからなければ最初のマップを返す（保険）。 */
+export function findMap(project: ProjectData, id: string): MapData {
+  return project.maps.find((m) => m.id === id) ?? project.maps[0];
+}
