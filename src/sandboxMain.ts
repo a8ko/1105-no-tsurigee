@@ -1,6 +1,7 @@
 import Phaser from "phaser";
 import { SANDBOX } from "@/data/walkSandbox";
 import { WalkSandboxScene } from "@/scenes/WalkSandboxScene";
+import { SandboxFishingScene } from "@/scenes/SandboxFishingScene";
 
 /**
  * 歩行キャラ・サンドボックス専用のゲーム起動ファイル。
@@ -20,7 +21,7 @@ const config: Phaser.Types.Core.GameConfig = {
     mode: Phaser.Scale.FIT,
     autoCenter: Phaser.Scale.CENTER_BOTH,
   },
-  scene: [WalkSandboxScene],
+  scene: [WalkSandboxScene, SandboxFishingScene],
 };
 
 const game = new Phaser.Game(config);

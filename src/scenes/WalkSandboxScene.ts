@@ -10,6 +10,8 @@ import {
 } from "@/data/walkSandbox";
 import type { Direction } from "@/types";
 import { preloadAssets, registerAnimations, makeWindow } from "@/systems/AssetLoader";
+import { STAGE_1 } from "@/data/stageCatchables";
+import { isStageCleared, getCaughtItems } from "@/systems/StageProgress";
 
 /** テクスチャ／アニメのキー。 */
 const SHEET_KEY = "sandbox_character";
@@ -116,6 +118,12 @@ export class WalkSandboxScene extends Phaser.Scene {
   private choiceBg?: Phaser.GameObjects.GameObject;
   private choicePromptText?: Phaser.GameObjects.Text;
   private choiceItemTexts: Phaser.GameObjects.Text[] = [];
+
+  // --- 星に名付けた直後の「大きく名前を見せる」演出（閉じたら続けて説明メッセージを出す）。 ---
+  private bigNameOpen = false;
+  private bigNameNextMessage = "";
+  private bigNameBg?: Phaser.GameObjects.GameObject;
+  private bigNameText?: Phaser.GameObjects.Text;
 
   private infoText!: Phaser.GameObjects.Text;
   private toastText!: Phaser.GameObjects.Text;
@@ -326,6 +334,14 @@ export class WalkSandboxScene extends Phaser.Scene {
         }
         if (Phaser.Input.Keyboard.JustDown(this.spaceKey)) this.confirmChoice();
       }
+      return;
+    }
+
+    // 大きな名前表示中は止める。スペースで閉じて、続きの説明メッセージへ。
+    if (this.bigNameOpen) {
+      this.player.anims.stop();
+      this.player.setFrame(this.idleFrame(this.facing));
+      if (Phaser.Input.Keyboard.JustDown(this.spaceKey)) this.closeBigNameReveal();
       return;
     }
 
@@ -884,11 +900,35 @@ export class WalkSandboxScene extends Phaser.Scene {
     try {
       // このマップ専用の保存 → 無ければ旧バージョンの保存 → それも無ければ設定ファイル。
       const raw = localStorage.getItem(eventKey(this.currentMap.id)) ?? localStorage.getItem(OLD_EVENT_KEY);
-      if (raw) return JSON.parse(raw) as EventMarker[];
+      if (raw) return this.mergeSavedMarkersWithConfig(JSON.parse(raw) as EventMarker[]);
     } catch {
       /* 壊れていたら無視 */
     }
     return this.cloneConfigMarkers();
+  }
+
+  /**
+   * 保存された地点（位置・きっかけ＝ゲーム内のVキーエディタで置いた内容）に、
+   * 設定ファイル側の中身（kind/message/prompt/choices）を重ねる。
+   * これらの中身はゲーム内エディタでは編集できず、私（Claude）が設定ファイルに書く部分なので、
+   * 位置だけ先に保存されたあとで中身を追加・変更しても、次回起動時に自動で反映されるようにする
+   * （番号＝配列の並び順で対応付け）。
+   */
+  private mergeSavedMarkersWithConfig(saved: EventMarker[]): EventMarker[] {
+    const configMarkers = this.currentMap.eventMarkers;
+    return saved.map((m, i) => {
+      const cfg = configMarkers[i];
+      if (!cfg) return m;
+      return {
+        x: m.x,
+        y: m.y,
+        trigger: m.trigger,
+        kind: cfg.kind,
+        message: cfg.message,
+        prompt: cfg.prompt,
+        choices: cfg.choices ? (JSON.parse(JSON.stringify(cfg.choices)) as EventChoice[]) : undefined,
+      };
+    });
   }
 
   /** 設定ファイルの「このマップ」のイベント地点を丸ごと複製する（choices 配列まで深くコピー）。 */
@@ -959,9 +999,13 @@ export class WalkSandboxScene extends Phaser.Scene {
     if (best >= 0) this.fireEvent(best);
   }
 
-  /** 地点の中身を表示する。choices があれば選択肢、message があればそれ、無ければ仮文。 */
+  /** 地点の中身を表示する。kind があれば専用処理、choices があれば選択肢、message があればそれ、無ければ仮文。 */
   private fireEvent(index: number): void {
     const m = this.markers[index];
+    if (m.kind === "rocket") {
+      this.fireRocketEvent(m);
+      return;
+    }
     if (m.choices && m.choices.length > 0) {
       this.openChoice(m);
       return;
@@ -972,6 +1016,37 @@ export class WalkSandboxScene extends Phaser.Scene {
       `${num} のイベント（${this.triggerLabel(m.trigger)}）が発動しました。\n` +
         "（ここに出す内容は、あなたが教えてくれた中身に差し替えます）";
     this.openMessage(text);
+  }
+
+  /**
+   * ロケットを調べたときの反応。いつでも図鑑を見られる。
+   * ステージ1の探索が終わっていれば「名前をつけて出発する」も選べる。
+   */
+  private fireRocketEvent(m: EventMarker): void {
+    const cleared = isStageCleared(STAGE_1.id);
+    const choices: EventChoice[] = [{ label: "図鑑を見る", action: "viewEncyclopedia" }];
+    if (cleared) {
+      choices.push({ label: "この星に名前をつけて出発する", action: "nameStarAndDepart" });
+    }
+    choices.push({ label: "やめておく" });
+
+    this.openChoice({
+      ...m,
+      prompt: cleared ? "ロケットだ。どうする？" : "ロケットだ。この星のものを、まだ全部は見つけていないようだ。どうする？",
+      choices,
+    });
+  }
+
+  /** 発見済みは名前とフレーバー、未発見は？？？にした図鑑のテキストを組み立てる。 */
+  private buildEncyclopediaText(): string {
+    const caughtIds = getCaughtItems(STAGE_1.id);
+    const lines = STAGE_1.items
+      .slice()
+      .sort((a, b) => a.encyclopediaNumber - b.encyclopediaNumber)
+      .map((item) =>
+        caughtIds.has(item.id) ? `${item.encyclopediaNumber}. ${item.name}\n　　${item.description}` : `${item.encyclopediaNumber}. ？？？`,
+      );
+    return `${STAGE_1.locationLabel} の図鑑（${caughtIds.size} / ${STAGE_1.items.length}）\n\n${lines.join("\n\n")}`;
   }
 
   private anyJustDown(keys: Phaser.Input.Keyboard.Key[]): boolean {
@@ -1030,6 +1105,28 @@ export class WalkSandboxScene extends Phaser.Scene {
   private confirmChoice(): void {
     const choice = this.choiceList[this.choiceIndex];
     this.closeChoice();
+    if (choice?.action === "startFishing") {
+      this.scene.start("SandboxFishingScene");
+      return;
+    }
+    if (choice?.action === "viewEncyclopedia") {
+      this.openEncyclopediaMessage(this.buildEncyclopediaText());
+      return;
+    }
+    if (choice?.action === "nameStarAndDepart") {
+      // 星の名前は自由形式で入力してもらう（まずはブラウザ標準の入力ダイアログで実装。
+      // ゲーム内蔵の入力欄にしたくなったら、この中身だけ差し替えればよい）。
+      const input = window.prompt(`${STAGE_1.locationLabel} に、どんな名前をつけますか？`, "")?.trim();
+      if (input) {
+        this.openBigNameReveal(
+          input,
+          `${STAGE_1.locationLabel} に「${input}」と名付けた。\n\n` + "（つぎの星へ出発する演出は、まだこれからです）",
+        );
+      } else {
+        this.openMessage("名前をつけるのをやめた。");
+      }
+      return;
+    }
     if (choice?.reply) this.openMessage(choice.reply);
   }
 
@@ -1041,6 +1138,48 @@ export class WalkSandboxScene extends Phaser.Scene {
     this.choiceBg = undefined;
     this.choicePromptText = undefined;
     this.choiceItemTexts = [];
+  }
+
+  /**
+   * 名付けた直後に、その名前だけを画面いっぱいに大きく見せる演出。
+   * スペースキーで閉じると、続けて nextMessage を通常のメッセージ枠で表示する。
+   */
+  private openBigNameReveal(name: string, nextMessage: string): void {
+    this.bigNameOpen = true;
+    this.bigNameNextMessage = nextMessage;
+    this.player.anims.stop();
+    this.player.setFrame(this.idleFrame(this.facing));
+
+    const w = SANDBOX.viewWidth;
+    const h = SANDBOX.viewHeight;
+    this.bigNameBg = this.add
+      .rectangle(w / 2, h / 2, w, h, 0x000000, 0.75)
+      .setScrollFactor(0)
+      .setDepth(300);
+    this.bigNameText = this.add
+      .text(w / 2, h / 2, name, {
+        fontFamily: '"Hiragino Maru Gothic ProN", sans-serif',
+        fontSize: "88px",
+        fontStyle: "bold",
+        color: "#ffd24a",
+        align: "center",
+        wordWrap: { width: w - 160 },
+      })
+      .setOrigin(0.5)
+      .setScrollFactor(0)
+      .setDepth(301);
+    this.showToast("スペースキーで次へ");
+  }
+
+  private closeBigNameReveal(): void {
+    this.bigNameOpen = false;
+    this.bigNameBg?.destroy();
+    this.bigNameText?.destroy();
+    this.bigNameBg = undefined;
+    this.bigNameText = undefined;
+    const next = this.bigNameNextMessage;
+    this.bigNameNextMessage = "";
+    this.openMessage(next);
   }
 
   private openMessage(text: string): void {
@@ -1062,6 +1201,32 @@ export class WalkSandboxScene extends Phaser.Scene {
         color: "#ffffff",
         wordWrap: { width: w - 140 },
         lineSpacing: 6,
+      })
+      .setScrollFactor(0)
+      .setDepth(201);
+    this.showToast("スペースキーで閉じる");
+  }
+
+  /** 図鑑のように長い文章向けの大きなメッセージ枠（枠・フィールドは openMessage と共通）。 */
+  private openEncyclopediaMessage(text: string): void {
+    this.messageOpen = true;
+    this.player.anims.stop();
+    this.player.setFrame(this.idleFrame(this.facing));
+
+    const w = SANDBOX.viewWidth;
+    const h = SANDBOX.viewHeight;
+    const boxH = h - 120;
+    const top = 60;
+    this.messageBg = makeWindow(this, w / 2, top + boxH / 2, w - 160, boxH)
+      .setScrollFactor(0)
+      .setDepth(200);
+    this.messageText = this.add
+      .text(100, top + 30, text, {
+        fontFamily: '"Hiragino Maru Gothic ProN", sans-serif',
+        fontSize: "20px",
+        color: "#ffffff",
+        wordWrap: { width: w - 260 },
+        lineSpacing: 8,
       })
       .setScrollFactor(0)
       .setDepth(201);

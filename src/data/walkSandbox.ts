@@ -43,6 +43,8 @@ export interface EventChoice {
   label: string;
   /** 選んだあとに出すメッセージ（任意。未設定なら何も出さず閉じる）。 */
   reply?: string;
+  /** 選んだときに、返事の代わりに特別な動作を起こす（例: 釣りシーンへ切り替える）。 */
+  action?: "startFishing" | "nameStarAndDepart" | "viewEncyclopedia";
 }
 
 /** マップ上に置く1つのイベント地点。番号①②③…は配列の並び順で決まる。 */
@@ -61,6 +63,11 @@ export interface EventMarker {
   prompt?: string;
   /** 選択肢の一覧（設定すると prompt とセットで「質問＋選択肢」を出す）。 */
   choices?: EventChoice[];
+  /**
+   * 特別な振る舞いをする地点の種別（省略時は上の message/choices だけの通常イベント）。
+   * "rocket"＝探索が終わっているかどうかで反応を出し分けるロケット（中身は WalkSandboxScene 側で分岐）。
+   */
+  kind?: "rocket";
 }
 
 /** 1つの向きの設定：その向きに使う「行」と、歩行で再生する「列」の順番。 */
@@ -201,9 +208,16 @@ export const SANDBOX: ProjectData = {
           trigger: "step",
           prompt: "つりする？",
           choices: [
-            { label: "うん。", reply: "（ここに釣りが入ります）" },
+            { label: "うん。", action: "startFishing" },
             { label: "いいや。" },
           ],
+        },
+        {
+          // ② ロケット（調べると発動）。図鑑を見られ、探索完了後は名前をつけて出発できます。
+          x: 936,
+          y: 600,
+          trigger: "examine",
+          kind: "rocket",
         },
       ],
       /** キャラの最初の立ち位置（画面の中央あたり）。 */
