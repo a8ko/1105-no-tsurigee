@@ -199,7 +199,34 @@ export const SANDBOX: ProjectData = {
         /** ★ 手描き背景画像のパス。置いた画像のファイル名に合わせて変えてください。 */
         path: "background.png",
       },
-      collisionRects: [],
+      collisionRects: [
+        { x: 624, y: 528, width: 48, height: 48 },
+        { x: 576, y: 528, width: 48, height: 48 },
+        { x: 528, y: 528, width: 48, height: 48 },
+        { x: 480, y: 528, width: 48, height: 48 },
+        { x: 480, y: 576, width: 48, height: 48 },
+        { x: 480, y: 624, width: 48, height: 48 },
+        { x: 528, y: 672, width: 48, height: 48 },
+        { x: 576, y: 672, width: 48, height: 48 },
+        { x: 480, y: 672, width: 48, height: 48 },
+        { x: 624, y: 672, width: 48, height: 48 },
+        { x: 672, y: 672, width: 48, height: 48 },
+        { x: 720, y: 672, width: 48, height: 48 },
+        { x: 768, y: 672, width: 48, height: 48 },
+        { x: 816, y: 672, width: 48, height: 48 },
+        { x: 864, y: 672, width: 48, height: 48 },
+        { x: 912, y: 672, width: 48, height: 48 },
+        { x: 960, y: 672, width: 48, height: 48 },
+        { x: 960, y: 624, width: 48, height: 48 },
+        { x: 960, y: 576, width: 48, height: 48 },
+        { x: 960, y: 528, width: 48, height: 48 },
+        { x: 912, y: 528, width: 48, height: 48 },
+        { x: 864, y: 528, width: 48, height: 48 },
+        { x: 672, y: 528, width: 48, height: 48 },
+        { x: 720, y: 528, width: 48, height: 48 },
+        { x: 768, y: 528, width: 48, height: 48 },
+        { x: 816, y: 528, width: 48, height: 48 },
+      ],
       eventMarkers: [
         {
           // ① 釣りポイント（踏むと「つりする？」と聞かれる）
@@ -221,7 +248,7 @@ export const SANDBOX: ProjectData = {
         },
       ],
       /** キャラの最初の立ち位置（画面の中央あたり）。 */
-      spawn: { x: 640, y: 520 },
+      spawn: { x: 696, y: 600 },
     },
   ],
 };
