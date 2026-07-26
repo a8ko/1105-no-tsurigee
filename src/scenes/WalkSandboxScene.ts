@@ -12,6 +12,7 @@ import type { Direction } from "@/types";
 import { preloadAssets, registerAnimations, makeWindow } from "@/systems/AssetLoader";
 import { STAGE_1 } from "@/data/stageCatchables";
 import { isStageCleared, getCaughtItems } from "@/systems/StageProgress";
+import { openTuningPanel } from "@/ui/TuningPanel";
 
 /** テクスチャ／アニメのキー。 */
 const SHEET_KEY = "sandbox_character";
@@ -297,6 +298,8 @@ export class WalkSandboxScene extends Phaser.Scene {
     kb.on("keydown-P", () => this.runOnce("spawn", () => this.setStartHere()));
     // H: 当たり判定の赤四角の表示／非表示を切り替える（本番の見た目を確認する）。
     kb.on("keydown-H", () => this.runOnce("show", () => this.toggleShowRects()));
+    // G: 釣りの調整パネル（確率・秒数・メーターを手で変える）。
+    kb.on("keydown-G", () => this.runOnce("tuning", () => openTuningPanel(this)));
 
     // スペース：調べるイベントの発動／メッセージを閉じる。
     this.spaceKey = kb.addKey(K.SPACE);
@@ -1308,6 +1311,7 @@ export class WalkSandboxScene extends Phaser.Scene {
           "WASD / 矢印キー: 移動  /  スペース: 目の前を調べる",
           "P: いまいる場所をスタート位置にする",
           "C: 当たり判定エディタを開く  /  V: イベント配置エディタを開く",
+          "G: 釣り調整パネルを開く（確率・秒数・メーター）",
           `H: 当たり判定の表示／非表示（いま: ${this.showRects ? "表示" : "非表示=本番"}）`,
         ].join("\n"),
       );

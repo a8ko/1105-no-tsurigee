@@ -16,7 +16,8 @@ npm run dev   # http://localhost:5173/ 、サンドボックスは /sandbox.html
 
 ## Playwright での駆動
 
-- 参考実装: `scripts/smoke-sandbox.mjs`（歩行・当たり判定エディタ）、`scripts/verify-stage1-fishing.mjs`（ステージ1釣り一式）
+- 参考実装: `scripts/smoke-sandbox.mjs`（歩行・当たり判定エディタ）、`scripts/verify-stage1-fishing.mjs`（ステージ1釣り一式）、`scripts/verify-tuning-panel.mjs`（釣り調整パネル＝DOM の UI）
+- 調整パネル（`G` キー）は Phaser ではなく **DOM** で作られているので、`.tp-root` などの CSS セレクタで直接操作・確認できる（スライダーは `value` を入れて `input` イベントを dispatch する）
 - `chromium.launch({ channel: "chrome", headless: true })` + `newPage({ viewport: { width: 1280, height: 720 } })`
 - シーン取得: `window.__SANDBOX__.scene.getScene("WalkSandboxScene")` / `getScene("SandboxFishingScene")`
 - アクティブ判定: `window.__SANDBOX__.scene.isActive("<SceneKey>")`

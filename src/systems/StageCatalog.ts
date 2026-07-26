@@ -1,14 +1,14 @@
 import type { StageCatchable } from "@/data/stageCatchables";
+import type { ProbabilityTuning } from "@/data/fishingTuning";
+import { getTuning } from "@/systems/TuningStore";
 
-/** 1キャストごとに、まだ見つけていない種（大トリ以外）の重みへ加える救済値。 */
-const PITY_STEP = 2;
-/** 上の救済の頭打ち（この回数ぶんより多くは積み増さない）。 */
-const PITY_CAP = 20;
-
-/** 大トリがロック解除されてからのキャスト1回ごとに、大トリの重みへ加える救済値。 */
-const LEGENDARY_PITY_STEP = 2;
-/** 上の救済の頭打ち。 */
-const LEGENDARY_PITY_CAP = 20;
+/** 抽選の細かい振る舞いを差し替えるための任意設定。 */
+export interface RollOptions {
+  /** 乱数。シミュレーション（試し引き）やテストで差し替える。省略時は Math.random。 */
+  rng?: () => number;
+  /** 出やすさの設定。省略時は調整パネルの現在値を使う。 */
+  probability?: ProbabilityTuning;
+}
 
 /**
  * そのステージで最もレアな種（＝「大トリ」）が、他の種を全部発見し終えて
@@ -33,10 +33,10 @@ export function isLegendaryUnlocked(items: readonly StageCatchable[], caught: Re
  * - その状態（大トリがロック解除された状態）でキャストを重ねる（粘る）ほど、
  *   大トリの重みだけが専用の救済でじわじわ上がっていく（確定保証ではない、上限つき）。
  *
- * 重みの式は旧 Catalog.roll() と同じ `(最大レア度+1-rarity)^2`
- * （レア度が高いほど二次関数的に出にくい）。
+ * 重みの式は `(最大レア度+1-rarity)^指数`（既定の指数は 2 ＝ レア度が高いほど二次関数的に出にくい）。
  * まだ見つけていない種（大トリ以外）も、キャスト回数（粘った回数）に応じて
  * 重みを底上げする＝粘るほど出やすくなる緩やかな救済（同じく上限つき）。
+ * 指数・救済の強さは調整パネル（G キー）の「確率」タブで変えられる。
  *
  * 全種 uniqueCatch で埋まっている等、候補が尽きた場合は null を返す（保険）。
  */
@@ -45,8 +45,11 @@ export function rollForStage(
   caught: ReadonlySet<string>,
   castCount: number,
   legendaryUnlockedCastCount: number,
-  rng: () => number = Math.random,
+  options: RollOptions = {},
 ): StageCatchable | null {
+  const rng = options.rng ?? Math.random;
+  const prob = options.probability ?? getTuning().probability;
+
   const overallMaxRarity = items.reduce((m, c) => Math.max(m, c.rarity), 1);
   const legendaryUnlocked = isLegendaryUnlocked(items, caught);
 
@@ -58,11 +61,11 @@ export function rollForStage(
   if (candidates.length === 0) return null;
 
   const maxRarity = candidates.reduce((m, c) => Math.max(m, c.rarity), 1);
-  const pity = Math.min(castCount, PITY_CAP) * PITY_STEP;
-  const legendaryPity = Math.min(legendaryUnlockedCastCount, LEGENDARY_PITY_CAP) * LEGENDARY_PITY_STEP;
+  const pity = Math.min(castCount, prob.pityCap) * prob.pityStep;
+  const legendaryPity = Math.min(legendaryUnlockedCastCount, prob.legendaryPityCap) * prob.legendaryPityStep;
   const weights = candidates.map((c) => {
     const base = maxRarity + 1 - c.rarity;
-    const w = base * base;
+    const w = Math.pow(base, prob.rarityExponent);
     if (caught.has(c.id)) return w;
     return c.rarity === overallMaxRarity ? w + legendaryPity : w + pity;
   });

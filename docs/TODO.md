@@ -91,4 +91,5 @@
 ## 注意（運用ルール）
 
 - **ゲーム性に関わる調整**（テンポ・判定・難易度・確率など）を変えたら、必ず [tuning-log.md](tuning-log.md) に追記（CLAUDE.md / AGENT.md のルール）。
+  釣りの数値は `G` キーの[調整パネル](features/fishing.md)で気軽に試せるが、**正式採用（初期値に反映）するときは同じくログに残す**。
 - 変更後は最低でも `npm run typecheck`。挙動に関わる変更は `node scripts/smoke.mjs` も。

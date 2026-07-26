@@ -1,37 +1,26 @@
 import Phaser from "phaser";
 import { SANDBOX } from "@/data/walkSandbox";
 import { Depth, Palette, TextColor, FontFamily } from "@/config/constants";
+import { buildMeterBands } from "@/systems/meter/meterBands";
+import { getTuning } from "@/systems/TuningStore";
+import { StageRarity } from "@/data/stageCatchables";
+import type { MeterBand } from "@/systems/meter/meterBands";
 import type { InputManager } from "@/core/InputManager";
 import type { MeterGame, MeterResult } from "./MeterGame";
-
-/** メーターのゾーン（ゲージ値の区間と判定）。 */
-interface Band {
-  from: number;
-  to: number;
-  result: MeterResult;
-  color: number;
-}
 
 /**
  * 歩行サンドボックス方向（1280×720）向けのメーターゲーム。
  *
  * ロジックは旧 GaugeMeterGame（320×180）と同じ。サイズ・座標だけ新解像度に合わせて
  * 作り直している（旧ゲームの `GAME_WIDTH`/`GAME_HEIGHT` に依存させないための別ファイル）。
+ * ゾーン（緑/黄/赤）の幅は調整パネル（G キー）の設定を、始めるたびに読み直す。
  */
 export class SandboxGaugeMeterGame implements MeterGame {
-  private static readonly BANDS: readonly Band[] = [
-    { from: 0.0, to: 0.13, result: "miss", color: Palette.miss },
-    { from: 0.13, to: 0.33, result: "good", color: Palette.good },
-    { from: 0.33, to: 0.67, result: "perfect", color: Palette.perfect },
-    { from: 0.67, to: 0.87, result: "good", color: Palette.good },
-    { from: 0.87, to: 1.0, result: "miss", color: Palette.miss },
-  ];
+  /** 今回の実行で使うゾーン。start() のたびに調整パネルの値から作り直す。 */
+  private bands: readonly MeterBand[] = buildMeterBands();
 
-  /** ゲージが 0→1 に到達するまでの既定時間 (ms)。start() に渡さなければこれを使う（旧実装と同じ 2000ms）。 */
-  private static readonly DEFAULT_FILL_MS = 2000;
-
-  /** 今回の実行で使うゲージ速度 (ms)。レア度が高いほど短く（速く）呼び出し側から指定できる。 */
-  private fillMs = SandboxGaugeMeterGame.DEFAULT_FILL_MS;
+  /** 今回の実行で使うゲージ速度 (ms)。レア度が高いほど短く（速く）呼び出し側から指定する。 */
+  private fillMs = 2000;
 
   private readonly barWidth = 480;
   private readonly barHeight = 28;
@@ -57,9 +46,13 @@ export class SandboxGaugeMeterGame implements MeterGame {
     this.barY = SANDBOX.viewHeight - 90;
   }
 
-  /** @param fillMs ゲージが満タンになるまでの時間 (ms)。省略時は既定の 2000ms。 */
-  start(fillMs: number = SandboxGaugeMeterGame.DEFAULT_FILL_MS): Promise<MeterResult> {
-    this.fillMs = fillMs;
+  /**
+   * @param fillMs ゲージが満タンになるまでの時間 (ms)。レア度ごとの設定から呼び出し側が渡す。
+   *               省略したときは、いちばん易しいレア度（普通）の速さを使う。
+   */
+  start(fillMs?: number): Promise<MeterResult> {
+    this.fillMs = fillMs ?? getTuning().rarities[StageRarity.COMMON].meterFillMs;
+    this.bands = buildMeterBands();
     this.value = 0;
     this.started = false;
     this.finished = false;
@@ -87,9 +80,10 @@ export class SandboxGaugeMeterGame implements MeterGame {
       .setStrokeStyle(2, Palette.panelBorder);
     c.add(panel);
 
-    for (const band of SandboxGaugeMeterGame.BANDS) {
+    for (const band of this.bands) {
       const zx = this.barX + band.from * this.barWidth;
       const zw = (band.to - band.from) * this.barWidth;
+      if (zw <= 0) continue; // 幅ゼロに設定されたゾーンは描かない
       const zone = this.scene.add
         .rectangle(zx, this.barY, zw, this.barHeight, band.color, 0.85)
         .setOrigin(0, 0.5);
@@ -159,7 +153,7 @@ export class SandboxGaugeMeterGame implements MeterGame {
   }
 
   private judge(v: number): MeterResult {
-    for (const band of SandboxGaugeMeterGame.BANDS) {
+    for (const band of this.bands) {
       if (v >= band.from && v < band.to) {
         return band.result;
       }

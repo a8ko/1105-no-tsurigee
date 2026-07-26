@@ -1,10 +1,14 @@
 import { StageRarity } from "@/data/stageCatchables";
+import { getTuning } from "@/systems/TuningStore";
 
 /**
- * ステージ制のレア度ごとの釣りパラメータ（叩き台の初期値）。
+ * ステージ制のレア度ごとの釣りパラメータ。
  * レア度が高いほど：フッキングの猶予が短く、メーターの必要成功数が多く、
  * 食いつきのフェイント（ピクン）回数が増え、メーターが速くなる。
- * 数値は試作用の仮決め。実際に触った手ざわりをもとに tuning-log.md で調整していく。
+ *
+ * 実際の数値は調整パネル（ゲーム中の G キー）で変えられる。初期値は
+ * [`fishingTuning.ts`](fishingTuning.ts) にあり、ここでは「いま使う値」を読むだけ。
+ * 触った手ざわりをもとに決めた値は tuning-log.md に履歴として残す。
  */
 export interface StageDifficultyConfig {
   /** フッキング成功判定の猶予時間 (ms)。 */
@@ -19,56 +23,16 @@ export interface StageDifficultyConfig {
   meterFillMs: number;
 }
 
-export const STAGE_DIFFICULTY_CONFIGS: Readonly<Record<StageRarity, StageDifficultyConfig>> = {
-  [StageRarity.COMMON]: {
-    hookWindowMs: 600,
-    requiredSuccesses: 1,
-    allowGood: true,
-    pikunCountRange: [0, 2],
-    meterFillMs: 2000,
-  },
-  [StageRarity.UNCOMMON]: {
-    hookWindowMs: 520,
-    requiredSuccesses: 2,
-    allowGood: true,
-    pikunCountRange: [1, 3],
-    meterFillMs: 1750,
-  },
-  [StageRarity.RARE]: {
-    hookWindowMs: 420,
-    requiredSuccesses: 3,
-    allowGood: true,
-    pikunCountRange: [2, 4],
-    meterFillMs: 1500,
-  },
-  [StageRarity.SUPER_RARE]: {
-    hookWindowMs: 320,
-    requiredSuccesses: 5,
-    allowGood: false,
-    pikunCountRange: [3, 5],
-    meterFillMs: 1250,
-  },
-  [StageRarity.LEGENDARY]: {
-    hookWindowMs: 220,
-    requiredSuccesses: 8,
-    allowGood: false,
-    pikunCountRange: [4, 6],
-    meterFillMs: 1000,
-  },
-};
-
 export function getStageDifficultyConfig(rarity: StageRarity): StageDifficultyConfig {
-  return STAGE_DIFFICULTY_CONFIGS[rarity];
+  const r = getTuning().rarities[rarity];
+  return {
+    hookWindowMs: r.hookWindowMs,
+    requiredSuccesses: r.requiredSuccesses,
+    allowGood: r.allowGood,
+    pikunCountRange: [Math.min(r.pikunMin, r.pikunMax), Math.max(r.pikunMin, r.pikunMax)],
+    meterFillMs: r.meterFillMs,
+  };
 }
-
-/** この回数までの失敗は今まで通り（緩和なし）。これを超えた分だけ緩和が始まる。 */
-const FAIL_RELIEF_THRESHOLD = 3;
-/** 閾値を超えてからは、1回失敗するごとに1段階緩和する。1段階あたりの緩和幅。 */
-const HOOK_WINDOW_RELIEF_PER_STEP_MS = 4;
-const METER_FILL_RELIEF_PER_STEP_MS = 8;
-/** 緩和しても、1つ下のレア度よりこれだけは厳しい状態を保つ（このマージンより先へは緩めない）。 */
-const HOOK_WINDOW_MARGIN_MS = 4;
-const METER_FILL_MARGIN_MS = 10;
 
 /** rarity のひとつ簡単なレア度。普通(COMMON)より下は無いので null。 */
 function getNextEasierRarity(rarity: StageRarity): StageRarity | null {
@@ -78,22 +42,34 @@ function getNextEasierRarity(rarity: StageRarity): StageRarity | null {
 /**
  * 同じレア度に何度も失敗しているとき、食いつきの猶予とメーターの速さだけを少しずつ緩める。
  * 必要成功回数・Good可否・ピクン回数は変えない（「何度も粘る歯ごたえ」は残す）。
- * 最初の FAIL_RELIEF_THRESHOLD 回までは今まで通りの厳しさのまま。それを超えたら、
+ * 最初の failThreshold 回までは今まで通りの厳しさのまま。それを超えたら、
  * 1回失敗するごとに1段階ずつ緩む。どれだけ失敗しても、ひとつ下のレア度より
  * 必ず厳しい状態を保つ（際限なく簡単にはならない）。
+ *
+ * 緩和の効き方（何回目から・どれだけ・どこまで）は調整パネルの「救済」タブで変えられる。
  */
 export function getRelievedConfig(rarity: StageRarity, failCount: number): StageDifficultyConfig {
-  const base = STAGE_DIFFICULTY_CONFIGS[rarity];
-  const steps = Math.max(failCount - FAIL_RELIEF_THRESHOLD, 0);
+  const base = getStageDifficultyConfig(rarity);
+  const relief = getTuning().relief;
+  const steps = Math.max(failCount - relief.failThreshold, 0);
   if (steps <= 0) return base;
 
   const easier = getNextEasierRarity(rarity);
-  const hookWindowCeiling = easier ? STAGE_DIFFICULTY_CONFIGS[easier].hookWindowMs - HOOK_WINDOW_MARGIN_MS : Infinity;
-  const meterFillCeiling = easier ? STAGE_DIFFICULTY_CONFIGS[easier].meterFillMs - METER_FILL_MARGIN_MS : Infinity;
+  const easierCfg = easier === null ? null : getStageDifficultyConfig(easier);
+  const hookWindowCeiling = easierCfg ? easierCfg.hookWindowMs - relief.hookWindowMarginMs : Infinity;
+  const meterFillCeiling = easierCfg ? easierCfg.meterFillMs - relief.meterFillMarginMs : Infinity;
 
+  // Math.max(base, …) は保険。調整パネルでレア度どうしの大小を逆転させても、
+  // 「緩和したのに元より厳しくなる」ことだけは起きないようにする。
   return {
     ...base,
-    hookWindowMs: Math.min(base.hookWindowMs + steps * HOOK_WINDOW_RELIEF_PER_STEP_MS, hookWindowCeiling),
-    meterFillMs: Math.min(base.meterFillMs + steps * METER_FILL_RELIEF_PER_STEP_MS, meterFillCeiling),
+    hookWindowMs: Math.max(
+      base.hookWindowMs,
+      Math.min(base.hookWindowMs + steps * relief.hookWindowPerStepMs, hookWindowCeiling),
+    ),
+    meterFillMs: Math.max(
+      base.meterFillMs,
+      Math.min(base.meterFillMs + steps * relief.meterFillPerStepMs, meterFillCeiling),
+    ),
   };
 }

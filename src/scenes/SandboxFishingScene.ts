@@ -6,6 +6,8 @@ import { STAGE_1, POST_CATCH_CHOICES, type StageRarity } from "@/data/stageCatch
 import { rollForStage, isLegendaryUnlocked } from "@/systems/StageCatalog";
 import { InputManager } from "@/core/InputManager";
 import { SandboxGaugeMeterGame } from "@/systems/meter/SandboxGaugeMeterGame";
+import { getTuning, getTunedStageItems } from "@/systems/TuningStore";
+import { openTuningPanel } from "@/ui/TuningPanel";
 import type { StageDifficultyConfig } from "@/data/stageDifficulty";
 import type { StageCatchable, PostCatchChoice } from "@/data/stageCatchables";
 import { markStageCleared, markItemCaught } from "@/systems/StageProgress";
@@ -15,9 +17,6 @@ type Phase = "watch" | "hookWindow" | "waitingForHold" | "hit" | "transition" | 
 const FLOAT_BASE = { x: SANDBOX.viewWidth / 2 + 260, y: 320 };
 const ROD_TIP = { x: SANDBOX.viewWidth / 2 + 40, y: 260 };
 const PLAYER_POS = { x: SANDBOX.viewWidth / 2 - 120, y: 420 };
-
-/** フッキング成功後、メーターを始めるのに必要な「長押し」の継続時間 (ms)。 */
-const HOLD_TO_START_METER_MS = 300;
 
 /**
  * ステージ1（ファミレスのポール看板の上）の釣りシーン。試作版（1280×720）。
@@ -62,9 +61,18 @@ export class SandboxFishingScene extends Phaser.Scene {
     super("SandboxFishingScene");
   }
 
+  /**
+   * このステージのアイテム一覧（調整パネルでのレア度・一度きり枠の変更を反映したもの）。
+   * パネルで変えた内容が次のキャストから効くよう、使うたびに読み直す。
+   */
+  private get items(): readonly StageCatchable[] {
+    return getTunedStageItems(STAGE_1);
+  }
+
   create(): void {
     this.inputMgr = new InputManager(this);
     this.meter = new SandboxGaugeMeterGame(this, this.inputMgr);
+    this.input.keyboard?.on("keydown-G", () => openTuningPanel(this));
     this.phase = "watch";
     this.successCount = 0;
     this.target = null;
@@ -118,7 +126,11 @@ export class SandboxFishingScene extends Phaser.Scene {
 
   private renderHud(): void {
     this.add
-      .text(24, 20, "Q: 釣りをやめる", { fontFamily: FontFamily, fontSize: "18px", color: TextColor.dim })
+      .text(24, 20, "Q: 釣りをやめる  /  G: 調整パネル", {
+        fontFamily: FontFamily,
+        fontSize: "18px",
+        color: TextColor.dim,
+      })
       .setDepth(Depth.uiText);
     this.progressText = this.add
       .text(SANDBOX.viewWidth - 24, 20, "", { fontFamily: FontFamily, fontSize: "18px", color: TextColor.normal })
@@ -128,7 +140,12 @@ export class SandboxFishingScene extends Phaser.Scene {
   }
 
   private updateStageProgressLabel(): void {
-    this.progressText.setText(`探索 ${this.caught.size} / ${STAGE_1.items.length}`);
+    this.progressText.setText(`探索 ${this.caught.size} / ${this.items.length}`);
+  }
+
+  /** 調整パネルで最小・最大が逆転していても壊れないランダム値。 */
+  private randomBetween(a: number, b: number): number {
+    return Phaser.Math.Between(Math.min(a, b), Math.max(a, b));
   }
 
   private drawLines(): void {
@@ -159,12 +176,13 @@ export class SandboxFishingScene extends Phaser.Scene {
     // 何が食いつくかは、ピクン演出の前にここで先に決める
     // （レア度に応じてフェイント回数・メーター速度を変えるため、演出より前に確定させておく必要がある）。
     this.castCount += 1;
+    const items = this.items;
     // 大トリ専用の救済は「大トリがロック解除されてから」のキャスト数だけを数える
     // （他の種を集めるのに手間取った人ほど有利/不利になってしまわないようにするため）。
-    if (isLegendaryUnlocked(STAGE_1.items, this.caught)) {
+    if (isLegendaryUnlocked(items, this.caught)) {
       this.legendaryUnlockedCastCount += 1;
     }
-    const next = rollForStage(STAGE_1.items, this.caught, this.castCount, this.legendaryUnlockedCastCount);
+    const next = rollForStage(items, this.caught, this.castCount, this.legendaryUnlockedCastCount);
     if (!next) {
       // 保険：本来は釣った時点で stageClear へ遷移済みのはず。
       this.onStageClear();
@@ -174,20 +192,22 @@ export class SandboxFishingScene extends Phaser.Scene {
     const failCount = this.failCountByRarity.get(next.rarity) ?? 0;
     this.cfg = getRelievedConfig(next.rarity, failCount);
 
+    const pacing = getTuning().pacing;
     const [pikunMin, pikunMax] = this.cfg.pikunCountRange;
-    const pikunCount = Phaser.Math.Between(pikunMin, pikunMax);
-    const firstDelay = Phaser.Math.Between(2500, 5000);
+    const pikunCount = this.randomBetween(pikunMin, pikunMax);
+    const firstDelay = this.randomBetween(pacing.firstDelayMinMs, pacing.firstDelayMaxMs);
     this.time.delayedCall(firstDelay, () => this.runPikun(pikunCount));
   }
 
   private runPikun(remaining: number): void {
     if (this.phase !== "watch") return;
+    const pacing = getTuning().pacing;
     if (remaining > 0) {
       this.doPikun();
-      const interval = Phaser.Math.Between(1000, 2200);
+      const interval = this.randomBetween(pacing.pikunIntervalMinMs, pacing.pikunIntervalMaxMs);
       this.time.delayedCall(interval, () => this.runPikun(remaining - 1));
     } else {
-      const sinkDelay = Phaser.Math.Between(700, 1500);
+      const sinkDelay = this.randomBetween(pacing.sinkDelayMinMs, pacing.sinkDelayMaxMs);
       this.time.delayedCall(sinkDelay, () => {
         if (this.phase === "watch") this.beginBite();
       });
@@ -282,7 +302,7 @@ export class SandboxFishingScene extends Phaser.Scene {
       this.holdSince = this.time.now;
       return;
     }
-    if (this.time.now - this.holdSince >= HOLD_TO_START_METER_MS) {
+    if (this.time.now - this.holdSince >= getTuning().pacing.holdToStartMeterMs) {
       this.holdSince = null;
       this.promptText.setVisible(false);
       void this.runHit();
@@ -337,7 +357,7 @@ export class SandboxFishingScene extends Phaser.Scene {
     this.caught.add(target.id);
     markItemCaught(STAGE_1.id, target.id);
     this.updateStageProgressLabel();
-    const isStageClear = this.caught.size >= STAGE_1.items.length;
+    const isStageClear = this.caught.size >= this.items.length;
 
     await this.showMessageAndWait(
       `${target.name} を つかまえた！`,
@@ -358,7 +378,7 @@ export class SandboxFishingScene extends Phaser.Scene {
     this.caught.add(target.id);
     markItemCaught(STAGE_1.id, target.id);
     this.updateStageProgressLabel();
-    if (this.caught.size >= STAGE_1.items.length) {
+    if (this.caught.size >= this.items.length) {
       this.onStageClear();
     } else {
       this.startCast();

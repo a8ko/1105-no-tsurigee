@@ -11,6 +11,9 @@ export interface MeterGame {
   /**
    * メーターゲームを 1 回実行し、結果を解決する。
    * 実装は自身の表示・入力・後始末をすべて内部で完結させる。
+   *
+   * @param fillMs ゲージが満タンになるまでの時間 (ms)。レア度ごとに速さを変えたい実装が使う。
+   *               速さが固定の実装（旧 320×180 の GaugeMeterGame）は受け取らなくてよい。
    */
-  start(): Promise<MeterResult>;
+  start(fillMs?: number): Promise<MeterResult>;
 }
