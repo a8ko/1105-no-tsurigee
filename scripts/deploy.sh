@@ -34,4 +34,4 @@ git push origin main
 echo ""
 echo "GitHubに送りました(${MESSAGE})"
 echo "1〜3分後に反映されます:"
-echo "https://a8ko.github.io/1105-no-tsurigee/"
+echo "https://a8ko.github.io/1105-no-tsurigee/sandbox"
