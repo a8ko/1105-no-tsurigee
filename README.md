@@ -27,6 +27,7 @@ npm run dev      # 開発サーバ起動（http://localhost:5173/）
 npm run build      # 型チェック + 本番ビルド（dist/）
 npm run typecheck  # 型チェックのみ
 npm run preview    # ビルド結果をプレビュー
+npm run deploy     # でぷろいする
 ```
 
 ## 操作
